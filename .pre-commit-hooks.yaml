@@ -1,0 +1,9 @@
+- id: tree-police
+  name: tree-police (AST pattern scan)
+  description: >-
+    Scan source files for forbidden AST patterns via tree-sitter queries.
+    Drop extra rules in a repo-local .tree-police/ directory to extend the
+    built-in ruleset with no image rebuild.
+  entry: ghcr.io/imochoa/tree-police:latest --fail-on error
+  language: docker_image
+  pass_filenames: true

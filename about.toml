@@ -1,0 +1,14 @@
+# Config for `cargo about generate` -- produces THIRD-PARTY-LICENSES.md.
+# Run via `just third-party-licenses` (wraps `cargo about generate`).
+
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+]
+
+ignore-build-dependencies = false
+ignore-dev-dependencies = true

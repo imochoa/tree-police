@@ -1,0 +1,150 @@
+<img src="docs/logo.jpg" alt="tree-police logo" width="160" align="right">
+
+# tree-police
+
+A ripgrep-style linter that patrols source code for forbidden AST shapes,
+using [tree-sitter](https://tree-sitter.github.io/) queries baked into a
+single static binary. Built to run as a [pre-commit](https://pre-commit.com/)
+hook via a published Docker image — no Rust/Nix/tree-sitter toolchain
+required in the repos it scans.
+
+Adapted from a Spanflug CYSEC hackathon proof of concept.
+
+## Credits
+
+Most of this crate's Rust architecture is built on top of, and adapted from,
+[**tree-grepper**](https://github.com/BrianHicks/tree-grepper) (archived) by
+Brian Hicks — a general-purpose structural code search tool that this project
+turns into a rule-bundling linter. tree-grepper is the source and foundation
+for the parallel single-file-per-thread scan (`ignore` + `rayon`), git-ignore
+awareness via the `ignore` crate, the embedded-grammar-per-language approach,
+and the `_`-prefix-for-internal-captures capture convention used throughout
+`src/`.
+
+**License note:** tree-grepper is licensed under the
+[Hippocratic License 2.1](https://github.com/BrianHicks/tree-grepper/blob/main/LICENSE),
+not a standard OSS license — it carries its own attribution and
+notice-of-changes requirements. No source from tree-grepper is copied into
+this repo (the architecture is reimplemented independently, following its
+design), so this project's own `MIT OR Apache-2.0` license is unaffected, but
+the design debt to tree-grepper is real and this note exists so it stays
+visible.
+
+## Pre-commit quickstart
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/imochoa/tree-police
+    rev: v0.1.0  # pin a tag; see releases
+    hooks:
+      - id: tree-police
+```
+
+This pulls `ghcr.io/imochoa/tree-police` and runs it against every changed
+file in the commit; files whose extension isn't registered (see
+`src/registry.rs`) are silently skipped. Override severity/format via `args`,
+e.g. `args: ["--min-severity", "warning"]`.
+
+## Repo-local rules
+
+Drop extra `<label>-<code>.scm` files (same convention as `queries/`, see
+below) in a `.tree-police/` directory at your repo root and they're merged
+with the built-in ruleset automatically — no fork, no image rebuild:
+
+```
+# .tree-police/no-foo-py.scm
+((identifier) @no_foo
+  (#eq? @no_foo "foo")
+  (#set! severity "warning")
+  (#set! description "Don't use the identifier `foo`"))
+```
+
+Override the lookup path with `--rules-dir <dir>` if you'd rather keep it
+somewhere else.
+
+## What's covered
+
+Rules exist today for **Python** (`forbidden`, `security`, `temporal`, `web`
+categories) and **Terraform/HCL** (`naming`, `conventions`, `security`). Both
+rule sets are a small illustrative starting point, not an exhaustive policy —
+extend them or add your own via a repo-local `.tree-police/` directory (see
+above).
+
+The binary also bakes in grammars for **93 languages total** (see
+[`src/registry.rs`](src/registry.rs) for the full list) with no rules yet
+beyond those two — every tree-sitter grammar crate on crates.io whose
+`tree-sitter` core dependency is compatible with this crate's pinned version
+(a handful of popular languages are excluded because their published crate's
+`tree-sitter` pin can't coexist with ours in one binary, or because the
+published crate itself is broken — see the comment above
+`registry::LANGUAGES` for specifics and how to recheck). Covering a new
+language is just a new query file, no Cargo/registry change; unrecognized
+extensions are silently skipped, so a pre-commit hook can pass every changed
+file with no file-type allowlist of its own. Run `tree-police --list-rules`
+(or `--list-rules --format json`) for the live rules catalog, grouped by
+category — that's the source of truth for *rules*, not this file; for
+*supported languages*, `src/registry.rs` is the source of truth.
+
+## Query file naming
+
+`queries/` is flat: `<label>-<code>.scm`, where `<code>` is the routing key
+(`py`, `tf`, …) defined once in `src/registry.rs` and `<label>` is a free-form
+readable tag. See [`queries/README.md`](queries/README.md) for the full
+layout and rule-authoring conventions, and
+[`src/registry.rs`](src/registry.rs) for the language list.
+
+## Local development
+
+```bash
+direnv allow   # or: nix develop
+just build                        # cargo build --release
+just scan-bin .                   # scan the current tree (pretty report)
+just scan-bin --format json src/  # machine-readable output
+just scan-bin --list-rules        # embedded rule catalog, grouped by category
+just test                         # unit + black-box CLI + query-case tests
+just docker-build                 # nix build .#tree-police-static, then podman build
+just docker-run .                 # run the built image against a mounted dir
+```
+
+Key flags: `--format pretty|json|jsonl`, `--min-severity log|warning|error`,
+`--rule <id>` / `--category <name>` (repeatable, scope to specific
+rules/categories — see `--list-rules` for valid values), `--rules-dir <dir>`
+(default `.tree-police`), `--fail-on none|log|warning|error` (exit-code
+threshold, default `warning`), `--no-ignore`, `--hidden`, `-j/--threads`,
+`-v/-vv`. Exit codes: `0` = no findings at/above `--fail-on`, `1` = findings
+at/above the threshold, `2` = error.
+
+See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
+rule, adding a language, query-authoring gotchas).
+
+## Publishing
+
+`.github/workflows/release.yml` builds the musl-static binary via
+`nix build .#tree-police-static` and publishes `ghcr.io/imochoa/tree-police`
+on every push to `main` (tag `latest`) and version tag (tag `vX.Y.Z`).
+
+## SBOM
+
+`nix build .#sbom` (or `just sbom`) reproducibly generates a CycloneDX SBOM
+of the exact dependency set in `Cargo.lock`, using
+[`cargo-cyclonedx`](https://github.com/CycloneDX/cyclonedx-rust-cargo). The
+release workflow builds it the same way and attaches it to the published
+image as an OCI referrer via `cosign attach sbom` — pull it with
+`cosign download sbom ghcr.io/imochoa/tree-police@<digest>` (or any
+OCI-referrers-aware scanner) without needing a separate download URL.
+
+## License
+
+Dual-licensed [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your
+option — the Rust ecosystem convention, and compatible with every dependency
+in `Cargo.lock` (all MIT, Apache-2.0, Unicode-3.0, or Unlicense; none copyleft
+— see `about.toml`'s `accepted` list). [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md)
+bundles every dependency's license text, generated with
+[`cargo-about`](https://github.com/EmbarkStudios/cargo-about) via
+`just third-party-licenses` — regenerate it after any dependency change
+(`cargo about` fails the build if a new dependency's license isn't in
+`about.toml`'s accepted list, so this can't silently drift).
+
+See "Credits" above for the separate, non-dependency question of
+tree-grepper's Hippocratic License.
