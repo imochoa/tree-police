@@ -37,7 +37,7 @@ All commands are recipes in the [`justfile`](justfile). Exit codes: `0` =
 no findings, `1` = findings detected (suitable for CI gates), `2` = internal error.
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `just build` | `cargo build --release`. |
 | `just scan-bin [args]` | Run `tree-police`. Args pass through, e.g. `just scan-bin --format json src/`. |
 | `just query-test` | `cargo test --test query_cases` — per-rule annotated fixtures; see below. |
@@ -47,7 +47,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 
 ## Layout
 
-```
+```text
 .
 ├── flake.nix                 # devShell: Rust toolchain; tree-police-static (musl) package
 ├── Cargo.toml / Cargo.lock    # crate manifest (lockfile committed)

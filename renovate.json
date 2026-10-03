@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "nix": {
+    "enabled": true
+  },
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Rust (Cargo.toml/Cargo.lock) -- the ~90 tree-sitter-<lang> grammar crates in src/registry.rs, grouped so one PR doesn't become 90",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tree-sitter-*"],
+      "groupName": "tree-sitter grammar crates"
+    },
+    {
+      "description": "Nix flake inputs (flake.lock). Renovate's nix manager is beta and needs a `nix` binary on the Renovate runner for lock-file updates -- not guaranteed on hosted Renovate; verify PRs actually update flake.lock, not just open with a stale lock.",
+      "matchManagers": ["nix"],
+      "groupName": "nix flake inputs"
+    },
+    {
+      "description": "Docker base images and build tooling actions (this repo's own Dockerfile is FROM scratch with no pinned image today, but docker/dockerfile manager stays enabled for when that changes, and GH Actions docker/* steps are the practical 'docker' surface right now)",
+      "matchManagers": ["dockerfile", "github-actions"],
+      "matchPackageNames": ["docker/**", "sigstore/**", "DeterminateSystems/**"],
+      "groupName": "docker build tooling"
+    }
+  ]
+}

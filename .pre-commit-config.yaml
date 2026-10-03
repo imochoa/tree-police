@@ -1,0 +1,50 @@
+# This repo's own dev-workflow checks (not to be confused with
+# .pre-commit-hooks.yaml, which is what makes *this repo* usable as a
+# pre-commit hook source for other repos' Python/Terraform/etc. scanning).
+#
+# All hooks use `language: system` and run straight off the Nix devShell's
+# PATH (see flake.nix) -- no separate per-hook virtualenv/npm install, and
+# no tool version drifts from what `direnv allow`/`nix develop` already
+# pins. Run `direnv allow` (or `nix develop`) once, then `pre-commit install`.
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt -- --check
+        files: \.rs$
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy (deny warnings)
+        language: system
+        entry: cargo clippy --all-targets --release -- --deny warnings
+        files: \.rs$
+        pass_filenames: false
+
+      - id: nix-fmt
+        name: alejandra (nix fmt, check only)
+        language: system
+        entry: alejandra --check
+        files: \.nix$
+
+      - id: nix-statix
+        name: statix (nix lint)
+        language: system
+        entry: statix check
+        files: \.nix$
+        pass_filenames: false
+
+      - id: nix-deadnix
+        name: deadnix (nix dead code)
+        language: system
+        entry: deadnix --fail
+        files: \.nix$
+        pass_filenames: false
+
+      - id: markdownlint
+        name: markdownlint-cli2
+        language: system
+        entry: markdownlint-cli2
+        files: \.md$

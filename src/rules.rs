@@ -156,10 +156,9 @@ pub fn load_with_extra(extra_dir: Option<&Path>) -> Result<Ruleset> {
     let languages = registry::LANGUAGES
         .iter()
         .filter_map(|spec| {
-            by_lang.remove(spec.name).map(|queries| LanguageRules {
-                spec,
-                queries,
-            })
+            by_lang
+                .remove(spec.name)
+                .map(|queries| LanguageRules { spec, queries })
         })
         .collect();
     Ok(Ruleset { languages })
@@ -325,10 +324,7 @@ mod tests {
         // that comment must not be mistaken for the pattern's own capture.
         let slice = "(call function: (identifier) @_func) @os_popen_usage\n\
                       ; isn't @activity/@workflow decorated\n";
-        assert_eq!(
-            primary_capture_in(slice).as_deref(),
-            Some("os_popen_usage")
-        );
+        assert_eq!(primary_capture_in(slice).as_deref(), Some("os_popen_usage"));
     }
 
     #[test]

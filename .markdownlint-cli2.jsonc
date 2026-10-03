@@ -1,0 +1,16 @@
+{
+  // THIRD-PARTY-LICENSES.md is generated (`just third-party-licenses`) from
+  // upstream crates' own license texts -- not hand-authored prose, and not
+  // ours to reformat.
+  "ignores": ["THIRD-PARTY-LICENSES.md"],
+  "config": {
+    // Hard 80-column wrapping doesn't suit docs full of inline code, links,
+    // and tables; line content matters more than column count here.
+    "MD013": false,
+    // README.md's logo <img> comes before the H1 on purpose (float it
+    // right of the title); both rules exist to catch accidental HTML/
+    // missing titles, not this deliberate pattern.
+    "MD033": false,
+    "MD041": false
+  }
+}

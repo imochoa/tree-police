@@ -1,2 +1,3 @@
 *
-!dist/tree-police
+!dist/amd64/tree-police
+!dist/arm64/tree-police

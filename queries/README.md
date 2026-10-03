@@ -13,7 +13,7 @@ Flat, one `.scm` file per language today, named `<label>-<code>.scm`:
   filename stem — looked up against `src/registry.rs`'s `LangSpec::code`.
   A file named `foo.scm` with no `-` at all is treated as code `foo`.
 
-```
+```text
 rules-py.scm   # all active Python rules (registry code "py")
 rules-tf.scm   # all active Terraform/HCL rules (registry code "tf")
 ```
@@ -99,7 +99,12 @@ just query-test  # per-rule annotated fixtures (tests/query-cases/) only
 matching assertion too — see [`../AGENTS.md`](../AGENTS.md#query-case-tests)
 for the format.
 
+New to tree-sitter queries? Start with
+[`../docs/writing-queries.md`](../docs/writing-queries.md) for a syntax
+walkthrough before diving into the patterns below.
+
 Useful references:
+
 - [Tree-sitter query syntax](https://tree-sitter.github.io/tree-sitter/using-parsers/queries/)
 - [Tree-sitter Python grammar](https://github.com/tree-sitter/tree-sitter-python)
 - [Tree-sitter HCL grammar](https://github.com/tree-sitter-grammars/tree-sitter-hcl)

@@ -14,9 +14,9 @@
 
 use std::fs;
 
+use streaming_iterator::StreamingIterator;
 use tree_police::registry;
 use tree_police::rules;
-use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, QueryCursor};
 
 /// A `# <- @name` assertion: the capture expected on the line above it.

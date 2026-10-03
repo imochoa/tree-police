@@ -8,7 +8,7 @@ single static binary. Built to run as a [pre-commit](https://pre-commit.com/)
 hook via a published Docker image — no Rust/Nix/tree-sitter toolchain
 required in the repos it scans.
 
-Adapted from a Spanflug CYSEC hackathon proof of concept.
+Adapted from an internal hackathon proof of concept.
 
 ## Credits
 
@@ -46,14 +46,18 @@ file in the commit; files whose extension isn't registered (see
 `src/registry.rs`) are silently skipped. Override severity/format via `args`,
 e.g. `args: ["--min-severity", "warning"]`.
 
+See [`docs/pre-commit-example.md`](docs/pre-commit-example.md) for a full
+worked example: expected output on a failing commit, scoping to specific
+rules/categories, and troubleshooting.
+
 ## Repo-local rules
 
 Drop extra `<label>-<code>.scm` files (same convention as `queries/`, see
 below) in a `.tree-police/` directory at your repo root and they're merged
 with the built-in ruleset automatically — no fork, no image rebuild:
 
-```
-# .tree-police/no-foo-py.scm
+```scheme
+; .tree-police/no-foo-py.scm
 ((identifier) @no_foo
   (#eq? @no_foo "foo")
   (#set! severity "warning")
@@ -94,6 +98,11 @@ readable tag. See [`queries/README.md`](queries/README.md) for the full
 layout and rule-authoring conventions, and
 [`src/registry.rs`](src/registry.rs) for the language list.
 
+New to writing tree-sitter queries? See
+[`docs/writing-queries.md`](docs/writing-queries.md) for a from-scratch
+syntax reference (fields, captures, quantifiers, anchors, predicates) and
+tips for inspecting a file's AST before writing one.
+
 ## Local development
 
 ```bash
@@ -118,11 +127,38 @@ at/above the threshold, `2` = error.
 See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
 rule, adding a language, query-authoring gotchas).
 
+### This repo's own pre-commit checks
+
+Separate from `.pre-commit-hooks.yaml` (which makes *this repo* usable as a
+hook source for others), [`.pre-commit-config.yaml`](.pre-commit-config.yaml)
+lints tree-police's own Rust, Nix, and Markdown, running every tool straight
+off the Nix devShell's PATH (`language: system` — no separate per-hook
+install):
+
+```bash
+direnv allow   # or: nix develop -- provides cargo fmt/clippy, alejandra, statix, deadnix, markdownlint-cli2, pre-commit itself
+pre-commit install          # one-time
+pre-commit run --all-files  # cargo fmt --check, cargo clippy --deny warnings, alejandra --check, statix, deadnix, markdownlint-cli2
+```
+
+`.markdownlint-cli2.jsonc` disables line-length (`MD013`, docs have long
+inline links/code) and excludes the generated `THIRD-PARTY-LICENSES.md`.
+
 ## Publishing
 
-`.github/workflows/release.yml` builds the musl-static binary via
-`nix build .#tree-police-static` and publishes `ghcr.io/imochoa/tree-police`
-on every push to `main` (tag `latest`) and version tag (tag `vX.Y.Z`).
+`.github/workflows/release.yml` cross-compiles musl-static binaries for both
+`x86_64` and `aarch64` via Nix (`nix build .#tree-police-static-x86_64` /
+`.#tree-police-static-aarch64` — no QEMU, these are genuine cross builds, not
+emulated), then publishes a single multi-arch `ghcr.io/imochoa/tree-police`
+manifest (`linux/amd64` + `linux/arm64`) via `docker buildx` on every push to
+`main` (tag `latest`) and version tag (tag `vX.Y.Z`). `docker pull`/pre-commit
+picks the right architecture automatically — nothing arch-specific to
+configure on the consuming side.
+
+[`renovate.json`](renovate.json) keeps the Rust (`Cargo.lock`), Nix
+(`flake.lock` — beta Renovate manager, needs a `nix` binary on the Renovate
+runner to actually rewrite the lock file, not just open a stale-looking PR),
+and Docker/GitHub Actions build tooling versions current.
 
 ## SBOM
 

@@ -18,16 +18,23 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Build static binary (musl cross)
-        run: nix build .#tree-police-static
+      # Cross-compiled via Nix, not Docker buildx/QEMU: each is a genuine
+      # musl-static binary for its target, built once on this amd64 runner.
+      - name: Build static binaries (musl cross, both arches)
+        run: |
+          nix build .#tree-police-static-x86_64 -o result-amd64
+          nix build .#tree-police-static-aarch64 -o result-arm64
 
       - name: Stage build context
         run: |
-          mkdir -p dist
-          install -m755 result/bin/tree-police dist/tree-police
+          mkdir -p dist/amd64 dist/arm64
+          install -m755 result-amd64/bin/tree-police dist/amd64/tree-police
+          install -m755 result-arm64/bin/tree-police dist/arm64/tree-police
 
       # CycloneDX SBOM of the exact dependency set in Cargo.lock, built the
-      # same reproducible way as the binary (see flake.nix's `sbom` package).
+      # same reproducible way as the binaries (see flake.nix's `sbom`
+      # package). One SBOM covers both architectures -- it describes the
+      # Cargo dependency graph, not per-arch binary contents.
       - name: Build SBOM (nix)
         run: nix build .#sbom -o sbom-result
 
@@ -45,10 +52,17 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
 
+      # Only sets up the container driver so buildx can assemble a
+      # multi-platform manifest list; no QEMU needed since the Dockerfile
+      # just COPYs a prebuilt static binary per `TARGETARCH` -- no RUN step
+      # ever executes in the target architecture.
+      - uses: docker/setup-buildx-action@v3
+
       - uses: docker/build-push-action@v6
         id: push
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -393,7 +393,6 @@ fn css_language() -> Language {
     tree_sitter_css::LANGUAGE.into()
 }
 
-
 /// Every language the binary knows about, in a stable order. Covers every
 /// tree-sitter grammar crate on crates.io whose runtime dependency on
 /// `tree-sitter`/`tree-sitter-language` resolves against this crate's pinned

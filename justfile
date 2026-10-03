@@ -29,15 +29,25 @@ query-test:
 test:
     cargo test
 
-# Build a static (musl) tree-police and package it into a `FROM scratch` image.
+# Build a static (musl) tree-police for the host architecture and package it
+# into a `FROM scratch` image, e.g. for local testing. The published image
+# (see .github/workflows/release.yml) is multi-arch (amd64 + arm64) via
+# `docker buildx`; this recipe only builds the one you're running on.
 # Dereferences the `result` symlink before `podman build`: the build-context
 # tar preserves symlinks as-is and won't follow one pointing out to
 # /nix/store, so COPYing `result/bin/tree-police` directly would fail to resolve.
 docker-build:
-    nix build {{root}}#tree-police-static
-    mkdir -p {{root}}/dist
-    install -m755 {{root}}/result/bin/tree-police {{root}}/dist/tree-police
-    podman build -t tree-police:local -f {{root}}/Dockerfile {{root}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$(uname -m)" in
+        x86_64) nix_pkg=tree-police-static-x86_64; arch=amd64 ;;
+        arm64|aarch64) nix_pkg=tree-police-static-aarch64; arch=arm64 ;;
+        *) echo "unsupported host architecture: $(uname -m)" >&2; exit 1 ;;
+    esac
+    nix build "{{root}}#$nix_pkg"
+    mkdir -p "{{root}}/dist/$arch"
+    install -m755 "{{root}}/result/bin/tree-police" "{{root}}/dist/$arch/tree-police"
+    podman build --build-arg TARGETARCH="$arch" -t tree-police:local -f "{{root}}/Dockerfile" "{{root}}"
 
 # Run the built image against a mounted directory, e.g.
 #   just docker-run --format json /work/queries
