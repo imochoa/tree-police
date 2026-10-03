@@ -75,9 +75,8 @@ rule sets are a small illustrative starting point, not an exhaustive policy —
 extend them or add your own via a repo-local `.tree-police/` directory (see
 above).
 
-The binary also bakes in grammars for **93 languages total** (see
-[`src/registry.rs`](src/registry.rs) for the full list) with no rules yet
-beyond those two — every tree-sitter grammar crate on crates.io whose
+The binary also bakes in grammars for **92 languages total** with no rules
+yet beyond those two — every tree-sitter grammar crate on crates.io whose
 `tree-sitter` core dependency is compatible with this crate's pinned version
 (a handful of popular languages are excluded because their published crate's
 `tree-sitter` pin can't coexist with ours in one binary, or because the
@@ -85,10 +84,27 @@ published crate itself is broken — see the comment above
 `registry::LANGUAGES` for specifics and how to recheck). Covering a new
 language is just a new query file, no Cargo/registry change; unrecognized
 extensions are silently skipped, so a pre-commit hook can pass every changed
-file with no file-type allowlist of its own. Run `tree-police --list-rules`
-(or `--list-rules --format json`) for the live rules catalog, grouped by
-category — that's the source of truth for *rules*, not this file; for
-*supported languages*, `src/registry.rs` is the source of truth.
+file with no file-type allowlist of its own.
+
+`ada`, `adl`, `agda`, `bash`, `bicep`, `c`, `clojure`, `cmake`, `commonlisp`,
+`cpp`, `crystal`, `csharp`, `css`, `cuda`, `d`, `dart`, `dbscheme`,
+`devicetree`, `diff`, `elisp`, `elixir`, `elm`, `erb`, `erlang`, `fortran`,
+`fsharp`, `gdscript`, `gleam`, `glsl`, `go`, `godotresource`, `graphql`,
+`groovy`, `haskell`, `heex`, `html`, `ini`, `java`, `javascript`, `jinja2`,
+`json`, `jsonnet`, `julia`, `kdl`, `llvm`, `lua`, `luau`, `make`, `matlab`,
+`netlinx`, `nim`, `nix`, `objc`, `ocaml`, `ocamllex`, `odin`, `pascal`, `pgn`,
+`php`, `powershell`, `prolog`, `properties`, `proto`, `python`, `ql`,
+`qmljs`, `r`, `razor`, `rst`, `ruby`, `rust`, `scala`, `scheme`, `slang`,
+`slint`, `solidity`, `sparql`, `swift`, `t32`, `templ`, `tera`, `terraform`,
+`tlaplus`, `tsx`, `typescript`, `vcl`, `verilog`, `vhdl`, `wesl`, `xml`,
+`yaml`, `zig`.
+
+This list (name, registry code, file extensions, and the grammar crate
+behind each) lives in one place: [`src/registry.rs`](src/registry.rs) — treat
+it, not this README, as the source of truth, since it's regenerated from
+code rather than hand-maintained prose. Run `tree-police --list-rules` (or
+`--list-rules --format json`) for the live *rules* catalog, grouped by
+category (a much shorter list — most languages above have no rules yet).
 
 ## Query file naming
 

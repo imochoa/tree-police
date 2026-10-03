@@ -21,7 +21,7 @@ rules-tf.scm   # all active Terraform/HCL rules (registry code "tf")
 Rules within each file are classified with a `(#set! category "...")` tag
 rather than being split across files — see "Rule conventions" below.
 
-`src/registry.rs` registers 93 languages total, far more than have rule files
+`src/registry.rs` registers 92 languages total, far more than have rule files
 today — essentially every tree-sitter grammar crate on crates.io compatible
 with this project's pinned `tree-sitter` version, baked into the binary so
 adding a new rule file is all that's needed to start covering one of them; no

@@ -13,7 +13,7 @@ once, in parallel (`ignore` + `rayon`), with severity levels and
 pretty/JSON/JSONL output.
 
 Rules currently cover Python and Terraform/HCL. `src/registry.rs` also bakes
-in 91 other grammars (93 languages total) with no rule files yet — every
+in 90 other grammars (92 languages total) with no rule files yet — every
 tree-sitter grammar crate on crates.io compatible with this crate's pinned
 `tree-sitter` core version (see the comment above `registry::LANGUAGES` for
 what's excluded and why). A new rule file is all that's needed to start
