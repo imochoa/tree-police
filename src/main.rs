@@ -2,16 +2,19 @@
 //! tree-sitter queries, each tagged with a severity (error / warning / log).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
 use tracing_subscriber::EnvFilter;
+use tree_sitter::Parser as TsParser;
 
+use tree_police::registry;
 use tree_police::report::{self, Format};
 use tree_police::rules;
 use tree_police::scan::{self, ScanOptions};
 use tree_police::severity::Severity;
+use tree_police::tree_view;
 
 /// Severity threshold that makes the process exit non-zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -65,6 +68,12 @@ struct Args {
     #[arg(long)]
     list_rules: bool,
 
+    /// Print an indented AST for FILE and exit (language inferred from its
+    /// extension, same registry as scanning). Useful for discovering node
+    /// names while writing a query -- see docs/writing-queries.md.
+    #[arg(long, value_name = "FILE")]
+    show_tree: Option<PathBuf>,
+
     /// Do not respect .gitignore / .ignore files.
     #[arg(long)]
     no_ignore: bool,
@@ -103,6 +112,11 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<i32> {
+    if let Some(path) = &args.show_tree {
+        show_tree(path)?;
+        return Ok(0);
+    }
+
     if let Some(threads) = args.threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -147,6 +161,37 @@ fn run(args: Args) -> Result<i32> {
         _ => 0,
     };
     Ok(exit_code)
+}
+
+fn show_tree(path: &Path) -> Result<()> {
+    let ext = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+        anyhow!(
+            "{}: no file extension, can't infer a language",
+            path.display()
+        )
+    })?;
+    let spec = registry::for_extension(ext).ok_or_else(|| {
+        anyhow!(
+            "{}: no grammar registered for extension \".{ext}\" (see --list-rules or src/registry.rs for supported languages)",
+            path.display()
+        )
+    })?;
+
+    let source =
+        std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
+
+    let mut parser = TsParser::new();
+    parser
+        .set_language(&spec.language())
+        .map_err(|err| anyhow!("could not load grammar for {}: {err}", spec.name))?;
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| anyhow!("{}: failed to parse", path.display()))?;
+
+    let mut out = anstream::stdout();
+    tree_view::print_tree(&tree, &source, &mut out)?;
+    out.flush().ok();
+    Ok(())
 }
 
 fn fail_threshold(fail_on: FailOn) -> Option<Severity> {

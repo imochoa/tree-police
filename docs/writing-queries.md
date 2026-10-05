@@ -213,6 +213,11 @@ helper captures used to identify it:
 
 1. **Look at the real tree before guessing node names.** Options, roughly
    least to most setup:
+   - `tree-police --show-tree <file>` prints an indented tree for any file
+     whose extension is registered (same registry `scan` uses — run
+     `--list-rules` or check [`src/registry.rs`](../src/registry.rs) for
+     what's covered). No separate grammar checkout, no other tool — this is
+     the fastest option if you already have tree-police installed.
    - Paste your snippet into the [playground](https://tree-sitter.github.io/tree-sitter/7-playground.html)
      (select the matching language) — shows the live tree and highlights
      matches as you edit the query, no local install needed.

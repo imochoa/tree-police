@@ -98,3 +98,22 @@ fn list_rules_prints_catalog() {
         .stdout(predicate::str::contains("forbidden_print"))
         .stdout(predicate::str::contains("eval_exec_usage"));
 }
+
+#[test]
+fn show_tree_prints_an_indented_ast() {
+    tree_police()
+        .args(["--show-tree", PY_VIOLATIONS])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("module 1:1"))
+        .stdout(predicate::str::contains("call 1:1"))
+        .stdout(predicate::str::contains(": print"));
+}
+
+#[test]
+fn show_tree_rejects_an_unregistered_extension() {
+    tree_police()
+        .args(["--show-tree", "Cargo.toml"])
+        .assert()
+        .code(2);
+}

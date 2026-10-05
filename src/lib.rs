@@ -13,6 +13,7 @@ pub mod report;
 pub mod rules;
 pub mod scan;
 pub mod severity;
+pub mod tree_view;
 
 pub use report::Format;
 pub use scan::{Finding, ScanOptions, ScanStats};

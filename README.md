@@ -155,9 +155,11 @@ Key flags: `--format pretty|json|jsonl`, `--min-severity log|warning|error`,
 `--rule <id>` / `--category <name>` (repeatable, scope to specific
 rules/categories — see `--list-rules` for valid values), `--rules-dir <dir>`
 (default `.tree-police`), `--fail-on none|log|warning|error` (exit-code
-threshold, default `warning`), `--no-ignore`, `--hidden`, `-j/--threads`,
-`-v/-vv`. Exit codes: `0` = no findings at/above `--fail-on`, `1` = findings
-at/above the threshold, `2` = error.
+threshold, default `warning`), `--show-tree <file>` (print an indented AST
+instead of scanning — see [`docs/writing-queries.md`](docs/writing-queries.md)),
+`--no-ignore`, `--hidden`, `-j/--threads`, `-v/-vv`. Exit codes: `0` = no
+findings at/above `--fail-on`, `1` = findings at/above the threshold, `2` =
+error.
 
 See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
 rule, adding a language, query-authoring gotchas).
