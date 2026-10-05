@@ -91,6 +91,7 @@
           pkgs.statix # nix linter
           pkgs.deadnix # nix dead-code finder
           pkgs.markdownlint-cli2
+          pkgs.actionlint
         ];
 
         # Let the grammar crates' build scripts find libclang/headers if needed.

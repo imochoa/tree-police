@@ -50,6 +50,25 @@ See [`docs/pre-commit-example.md`](docs/pre-commit-example.md) for a full
 worked example: expected output on a failing commit, scoping to specific
 rules/categories, and troubleshooting.
 
+## Standalone CLI
+
+Prefer running it directly over Docker/pre-commit? Every
+[release](https://github.com/imochoa/tree-police/releases) attaches prebuilt
+binaries for Linux (amd64/arm64, static musl) and macOS (Intel/Apple
+Silicon), plus a checksums file and a CycloneDX SBOM. Every grammar and query
+file is statically linked into these same binaries — there's no separate
+grammars folder to download or manage, on any platform.
+
+```bash
+curl -LO https://github.com/imochoa/tree-police/releases/latest/download/tree-police-aarch64-apple-darwin.tar.gz
+tar xzf tree-police-aarch64-apple-darwin.tar.gz
+./tree-police --list-rules
+```
+
+(swap the filename for your platform: `x86_64-unknown-linux-musl`,
+`aarch64-unknown-linux-musl`, `x86_64-apple-darwin`, or
+`aarch64-apple-darwin`.)
+
 ## Repo-local rules
 
 Drop extra `<label>-<code>.scm` files (same convention as `queries/`, see
@@ -170,6 +189,13 @@ manifest (`linux/amd64` + `linux/arm64`) via `docker buildx` on every push to
 `main` (tag `latest`) and version tag (tag `vX.Y.Z`). `docker pull`/pre-commit
 picks the right architecture automatically — nothing arch-specific to
 configure on the consuming side.
+
+`.github/workflows/cli-release.yml` runs only on a version tag (a GitHub
+Release is a deliberate act, unlike `:latest`'s continuous republishing) and
+attaches the standalone binaries described above: the same Nix musl builds
+for Linux, plus two native `cargo build --release` jobs on GitHub's Intel and
+Apple Silicon macOS runners (no cross-compiling or universal binaries — each
+runner just builds for itself), a `checksums.txt`, and the CycloneDX SBOM.
 
 [`renovate.json`](renovate.json) keeps the Rust (`Cargo.lock`), Nix
 (`flake.lock` — beta Renovate manager, needs a `nix` binary on the Renovate

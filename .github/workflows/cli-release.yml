@@ -1,0 +1,112 @@
+name: CLI release
+
+# Only on a version tag -- unlike the Docker image (release.yml), which
+# republishes `:latest` on every push to main, a GitHub Release should be a
+# deliberate, versioned act.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    # Cross-compiled via Nix (not Docker buildx/QEMU) on one amd64 runner --
+    # same musl-static binaries release.yml builds for the Docker image.
+    # Everything (all ~90 grammars, the embedded query files) is statically
+    # linked in; there's no separate grammars folder to ship.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - nix_package: tree-police-static-x86_64
+            target: x86_64-unknown-linux-musl
+          - nix_package: tree-police-static-aarch64
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build (musl cross)
+        run: nix build ".#${{ matrix.nix_package }}" -o result
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          install -m755 result/bin/tree-police tree-police
+          tar czf "dist/tree-police-${{ matrix.target }}.tar.gz" tree-police
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-police-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  build-macos:
+    # Native builds, one job per arch -- GH's macos-15-intel runner is
+    # Intel, macos-14 is Apple Silicon (GH's "-latest"/bare "macos-NN"
+    # labels default to Apple Silicon now; Intel needs the explicit
+    # "-intel" suffix), so `cargo build --release` with no explicit
+    # --target already produces the right binary for each; no cross-compile
+    # or universal-binary step needed. Not Nix/musl: macOS has no musl
+    # equivalent, dynamic linking against system libs is normal here.
+    strategy:
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          install -m755 target/release/tree-police tree-police
+          tar czf "dist/tree-police-${{ matrix.target }}.tar.gz" tree-police
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree-police-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Same CycloneDX SBOM attached to the Docker image (release.yml) --
+      # describes the Cargo dependency graph, which is identical across all
+      # four binaries above, so one SBOM covers the whole release.
+      - name: Build SBOM (nix)
+        run: |
+          nix build .#sbom -o sbom-result
+          cp sbom-result/bom.json tree-police.cdx.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: tree-police-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: (cd dist && sha256sum -- *.tar.gz > checksums.txt)
+
+      - name: Create release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            dist/*.tar.gz dist/checksums.txt tree-police.cdx.json \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

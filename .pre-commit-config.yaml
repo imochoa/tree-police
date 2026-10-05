@@ -48,3 +48,10 @@ repos:
         language: system
         entry: markdownlint-cli2
         files: \.md$
+
+      - id: actionlint
+        name: actionlint (GitHub Actions workflows)
+        language: system
+        entry: actionlint
+        files: ^\.github/workflows/.*\.ya?ml$
+        pass_filenames: false
