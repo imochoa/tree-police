@@ -44,6 +44,9 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 | `just test` | `cargo test` — unit tests + black-box CLI tests (`tests/cli.rs`) + query-case tests. |
 | `just docker-build` | `nix build .#tree-police-static`, then `podman build` a `FROM scratch` image. |
 | `just docker-run [args]` | Run the built image (`-t` for color; see the recipe comment). |
+| `just third-party-licenses` | Regenerate `THIRD-PARTY-LICENSES.md` from `Cargo.lock`. |
+| `just sbom` | Build a CycloneDX SBOM (`sbom.cdx.json`) via Nix. |
+| `just release X.Y.Z` | Bump the version, run the test/lint gate, commit, tag `vX.Y.Z`, and push — triggers the Docker + GitHub Release workflows. Requires a clean `main` with no existing tag of that name. |
 
 ## Layout
 

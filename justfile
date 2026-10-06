@@ -70,3 +70,52 @@ third-party-licenses:
 sbom:
     nix build {{root}}#sbom -o sbom-result
     cp sbom-result/bom.json sbom.cdx.json
+
+# Tag and publish a release: bumps the version in Cargo.toml/flake.nix, runs
+# the test/lint gate, commits, tags, and pushes both -- the pushed tag
+# triggers .github/workflows/release.yml (multi-arch Docker image) and
+# cli-release.yml (GitHub Release with Linux/macOS binaries, checksums, and
+# the SBOM). Usage: `just release 0.1.2` (no leading "v"; the git tag gets one).
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{root}}
+    version="{{version}}"
+    tag="v$version"
+
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "error: version must be X.Y.Z (no leading 'v'), got '$version'" >&2
+        exit 1
+    fi
+    if [[ -n "$(git status --porcelain)" ]]; then
+        echo "error: working tree is dirty -- commit or stash first" >&2
+        exit 1
+    fi
+    branch="$(git rev-parse --abbrev-ref HEAD)"
+    if [[ "$branch" != "main" ]]; then
+        echo "error: on branch '$branch', not main" >&2
+        exit 1
+    fi
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        echo "error: tag $tag already exists" >&2
+        exit 1
+    fi
+
+    sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml && rm Cargo.toml.bak
+    sed -i.bak "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\";/version = \"$version\";/" flake.nix && rm flake.nix.bak
+
+    cargo build --release
+    cargo test --release
+    cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+    pre-commit run --all-files
+
+    git add Cargo.toml Cargo.lock flake.nix THIRD-PARTY-LICENSES.md
+    git commit -m "Release $tag"
+    git tag -a "$tag" -m "$tag"
+    git push origin main
+    git push origin "$tag"
+
+    echo "Pushed $tag. Watch the builds:"
+    echo "  https://github.com/imochoa/tree-police/actions"
+    echo "Release page (once cli-release.yml finishes):"
+    echo "  https://github.com/imochoa/tree-police/releases/tag/$tag"
