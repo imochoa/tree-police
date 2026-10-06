@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
 use tracing_subscriber::EnvFilter;
-use tree_sitter::Parser as TsParser;
+use tree_sitter::{Parser as TsParser, Query};
 
 use tree_police::registry;
 use tree_police::report::{self, Format};
@@ -65,14 +65,30 @@ struct Args {
     fail_on: FailOn,
 
     /// List the embedded rules (with severities) and exit.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["query", "query_file"])]
     list_rules: bool,
 
     /// Print an indented AST for FILE and exit (language inferred from its
     /// extension, same registry as scanning). Useful for discovering node
     /// names while writing a query -- see docs/writing-queries.md.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["query", "query_file", "list_rules"])]
     show_tree: Option<PathBuf>,
+
+    /// Ad-hoc query string to run against `paths` instead of the embedded
+    /// ruleset, reporting every non-`_` capture (not one rule-id capture
+    /// per pattern like the embedded ruleset) -- see docs/writing-queries.md.
+    #[arg(long, conflicts_with_all = ["query_file", "show_tree", "list_rules"])]
+    query: Option<String>,
+
+    /// Same as --query, read from a file instead of the command line.
+    #[arg(long, conflicts_with_all = ["query", "show_tree", "list_rules"])]
+    query_file: Option<PathBuf>,
+
+    /// Language for --query/--query-file. Inferred automatically when
+    /// `paths` resolve to files of exactly one registered language;
+    /// required if that's ambiguous (e.g. a mixed-language directory).
+    #[arg(long)]
+    lang: Option<String>,
 
     /// Do not respect .gitignore / .ignore files.
     #[arg(long)]
@@ -112,16 +128,38 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<i32> {
-    if let Some(path) = &args.show_tree {
-        show_tree(path)?;
-        return Ok(0);
-    }
-
     if let Some(threads) = args.threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build_global()
             .map_err(|err| anyhow!("could not configure thread pool: {err}"))?;
+    }
+
+    if let Some(path) = &args.show_tree {
+        show_tree(path)?;
+        return Ok(0);
+    }
+
+    let ad_hoc_query_source = match (&args.query, &args.query_file) {
+        (Some(q), _) => Some(q.clone()),
+        (None, Some(path)) => Some(
+            std::fs::read_to_string(path)
+                .with_context(|| format!("could not read query file {}", path.display()))?,
+        ),
+        (None, None) => None,
+    };
+    if let Some(source) = ad_hoc_query_source {
+        let opts = ScanOptions {
+            respect_gitignore: !args.no_ignore,
+            hidden: args.hidden,
+        };
+        return run_ad_hoc_query(
+            &source,
+            args.lang.as_deref(),
+            &args.paths,
+            args.format,
+            &opts,
+        );
     }
 
     let ruleset = rules::load_with_extra(Some(&args.rules_dir))?;
@@ -192,6 +230,35 @@ fn show_tree(path: &Path) -> Result<()> {
     tree_view::print_tree(&tree, &source, &mut out)?;
     out.flush().ok();
     Ok(())
+}
+
+/// Run an ad-hoc `--query`/`--query-file` and print every non-`_` capture
+/// (tree-grepper's model, see docs/writing-queries.md). Unlike the embedded
+/// ruleset, this is a search, not a lint gate: always exits 0 regardless of
+/// match count, and ignores --fail-on/--min-severity/--rule/--category,
+/// none of which have meaning without a severity/rule-id/category.
+fn run_ad_hoc_query(
+    source: &str,
+    lang_name: Option<&str>,
+    paths: &[PathBuf],
+    format: Format,
+    opts: &ScanOptions,
+) -> Result<i32> {
+    let spec = match lang_name {
+        Some(name) => registry::by_name(name)
+            .ok_or_else(|| anyhow!("unknown language {name:?} (see --list-rules for the ones with embedded rules, or src/registry.rs for every registered language)"))?,
+        None => scan::infer_language(paths, opts)?,
+    };
+
+    let query = Query::new(&spec.language(), source)
+        .with_context(|| format!("failed to compile query for language {}", spec.name))?;
+
+    let (matches, stats) = scan::run_query(paths, spec, &query, opts)?;
+
+    let mut out = anstream::stdout();
+    report::render_matches(format, &matches, &stats, &mut out)?;
+    out.flush().ok();
+    Ok(0)
 }
 
 fn fail_threshold(fail_on: FailOn) -> Option<Severity> {

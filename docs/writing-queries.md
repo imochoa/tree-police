@@ -209,6 +209,23 @@ helper captures used to identify it:
 (This is the real `os_system_usage` rule in
 [`queries/rules-py.scm`](../queries/rules-py.scm).)
 
+Before committing a pattern like this to a `.scm` file, try it as an ad-hoc
+query against real code:
+
+```bash
+tree-police --query '(call function: (attribute object: (identifier) @_mod (#eq? @_mod "os") attribute: (identifier) @_func (#eq? @_func "system")))' some_file.py
+```
+
+`--query`/`--query-file` run any query directly, reporting *every* non-`_`
+capture instead of the embedded ruleset's one-rule-id-per-pattern
+convention — no `(#set! severity ...)`/category needed, and no file to
+create first. Language is inferred from the target file/directory when
+unambiguous; see the README's "Ad-hoc queries" section for the full
+behavior (directory scanning, `--lang`, exit codes, `--format json`).
+Once it matches what you want, add the `(#set! ...)` directives and move it
+into `queries/<label>-<code>.scm` (or `.tree-police/` for a repo-local
+rule).
+
 ## Tips for writing new queries
 
 1. **Look at the real tree before guessing node names.** Options, roughly

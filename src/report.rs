@@ -10,7 +10,7 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 
 use crate::rules::Ruleset;
-use crate::scan::{Finding, ScanStats};
+use crate::scan::{Finding, Match, ScanStats};
 use crate::severity::Severity;
 
 /// Output format for findings.
@@ -79,7 +79,13 @@ fn render_pretty(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) ->
 
         let indent = " ".repeat(gutter.len());
         let pad = " ".repeat(finding.column.saturating_sub(1));
-        let width = caret_width(finding);
+        let width = caret_width(
+            finding.line,
+            finding.column,
+            finding.end_line,
+            finding.end_column,
+            &finding.snippet,
+        );
         let caret = "^".repeat(width);
         writeln!(w, "  {indent}{pad}{}", colorize(finding.severity, &caret))?;
     }
@@ -119,6 +125,80 @@ fn render_summary(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) -
         stats.files_with_findings,
         stats.files_scanned,
     )?;
+    Ok(())
+}
+
+/// Render ad-hoc `--query`/`--query-file` matches (see `scan::run_query`)
+/// in the requested format. Unlike `render`, there's no severity/category
+/// to show -- just where each capture landed and what it caught.
+pub fn render_matches(
+    format: Format,
+    matches: &[Match],
+    stats: &ScanStats,
+    w: &mut impl Write,
+) -> Result<()> {
+    match format {
+        Format::Pretty => render_matches_pretty(matches, stats, w),
+        Format::Json => {
+            serde_json::to_writer_pretty(&mut *w, matches)?;
+            writeln!(w)?;
+            Ok(())
+        }
+        Format::Jsonl => {
+            for m in matches {
+                serde_json::to_writer(&mut *w, m)?;
+                writeln!(w)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn render_matches_pretty(matches: &[Match], stats: &ScanStats, w: &mut impl Write) -> Result<()> {
+    let mut current: Option<&Path> = None;
+    for m in matches {
+        if current != Some(m.file.as_path()) {
+            if current.is_some() {
+                writeln!(w)?;
+            }
+            writeln!(w, "{}", m.file.display().bold().underline())?;
+            current = Some(m.file.as_path());
+        }
+
+        let location = format!("{}:{}", m.line, m.column);
+        writeln!(
+            w,
+            "  {location}  @{capture}",
+            location = location.dimmed(),
+            capture = m.capture.bold(),
+        )?;
+
+        let gutter = format!("{:>4} | ", m.line);
+        writeln!(w, "  {}{}", gutter.dimmed(), m.snippet)?;
+
+        let indent = " ".repeat(gutter.len());
+        let pad = " ".repeat(m.column.saturating_sub(1));
+        let width = caret_width(m.line, m.column, m.end_line, m.end_column, &m.snippet);
+        writeln!(w, "  {indent}{pad}{}", "^".repeat(width).cyan())?;
+    }
+
+    writeln!(w)?;
+    if matches.is_empty() {
+        writeln!(
+            w,
+            "{}",
+            format!("No matches. Scanned {} file(s).", stats.files_scanned).green()
+        )?;
+    } else {
+        writeln!(
+            w,
+            "{} {} match(es) in {} file(s) (scanned {}).",
+            "Summary:".bold(),
+            matches.len().to_string().bold(),
+            stats.files_with_findings,
+            stats.files_scanned,
+        )?;
+    }
     Ok(())
 }
 
@@ -223,15 +303,20 @@ fn list_rules_pretty(ruleset: &Ruleset, w: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
-fn caret_width(finding: &Finding) -> usize {
-    if finding.end_line == finding.line {
-        finding.end_column.saturating_sub(finding.column).max(1)
+fn caret_width(
+    line: usize,
+    column: usize,
+    end_line: usize,
+    end_column: usize,
+    snippet: &str,
+) -> usize {
+    if end_line == line {
+        end_column.saturating_sub(column).max(1)
     } else {
         // Multi-line node: underline to the end of the first line.
-        finding
-            .snippet
+        snippet
             .len()
-            .saturating_sub(finding.column.saturating_sub(1))
+            .saturating_sub(column.saturating_sub(1))
             .max(1)
     }
 }

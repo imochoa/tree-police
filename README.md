@@ -161,6 +161,36 @@ instead of scanning — see [`docs/writing-queries.md`](docs/writing-queries.md)
 findings at/above `--fail-on`, `1` = findings at/above the threshold, `2` =
 error.
 
+### Ad-hoc queries
+
+`--query '<scm>'` (or `--query-file <path>`) runs a one-off tree-sitter
+query instead of the embedded ruleset — no `.scm` file to write first.
+Language is inferred from `paths` when that's unambiguous (a single file,
+or a directory that's all one language); pass `--lang <name>` yourself for
+a mixed-language directory:
+
+```console
+$ tree-police --query '(call_expression function: (identifier) @fn)' src/main.rs
+src/main.rs
+  117:23  @fn
+   117 |     if let Err(err) = init_tracing(args.verbose) {
+                               ^^^^^^^^^^^^
+
+  121:11  @fn
+   121 |     match run(args) {
+               ^^^
+[... more matches ...]
+
+Summary: 16 match(es) in 1 file(s) (scanned 1).
+```
+
+Unlike ruleset scanning, this reports **every** non-`_` capture per match
+(tree-grepper's convention — see [`docs/writing-queries.md`](docs/writing-queries.md)),
+not one rule-id capture per pattern, and it's a search, not a lint gate: exit
+code is always `0`, and `--fail-on`/`--min-severity`/`--rule`/`--category`
+don't apply (none have meaning without a severity/rule-id/category).
+`--format json`/`jsonl` both work, for scripting.
+
 See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
 rule, adding a language, query-authoring gotchas).
 

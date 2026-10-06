@@ -117,3 +117,93 @@ fn show_tree_rejects_an_unregistered_extension() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn ad_hoc_query_infers_language_from_a_single_file() {
+    tree_police()
+        .args([
+            "--query",
+            "(call function: (identifier) @fn)",
+            PY_VIOLATIONS,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("@fn"))
+        .stdout(predicate::str::contains("print(\"debug\")"));
+}
+
+#[test]
+fn ad_hoc_query_reports_every_non_underscore_capture() {
+    // Two captures in one pattern: both should show up, unlike the
+    // embedded ruleset's one-rule-id-per-pattern convention.
+    tree_police()
+        .args([
+            "--format",
+            "json",
+            "--query",
+            r#"(call function: (identifier) @fn (#eq? @fn "print") arguments: (argument_list (string) @arg))"#,
+            PY_VIOLATIONS,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"capture\": \"fn\""))
+        .stdout(predicate::str::contains("\"capture\": \"arg\""));
+}
+
+#[test]
+fn ad_hoc_query_drops_underscore_captures() {
+    tree_police()
+        .args([
+            "--query",
+            r#"(call function: (identifier) @_fn (#eq? @_fn "print")) @whole"#,
+            PY_VIOLATIONS,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("@whole"))
+        .stdout(predicate::str::contains("@_fn").not());
+}
+
+#[test]
+fn ad_hoc_query_requires_lang_for_an_ambiguous_directory() {
+    tree_police()
+        .args(["--query", "(identifier)", "tests/fixtures"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("pass --lang"));
+}
+
+#[test]
+fn ad_hoc_query_respects_explicit_lang() {
+    tree_police()
+        .args([
+            "--lang",
+            "python",
+            "--query",
+            "(call function: (identifier) @fn)",
+            "tests/fixtures/python",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("@fn"));
+}
+
+#[test]
+fn ad_hoc_query_always_exits_zero_regardless_of_matches() {
+    // Ad-hoc query mode is a search, not a lint gate -- --fail-on doesn't
+    // apply. Exit 0 whether there are matches (violations.py) or none
+    // (clean.py), unlike embedded-ruleset scanning's --fail-on gating.
+    tree_police()
+        .args([
+            "--query",
+            "(call function: (identifier) @fn)",
+            PY_VIOLATIONS,
+        ])
+        .assert()
+        .success();
+    tree_police()
+        .args(["--query", "(call function: (identifier) @fn)", PY_CLEAN])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No matches"));
+}
