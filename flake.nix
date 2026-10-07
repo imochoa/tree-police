@@ -24,7 +24,7 @@
       mkStatic = crossPkgs:
         crossPkgs.rustPlatform.buildRustPackage {
           pname = "tree-police";
-          version = "0.1.0";
+          version = "0.1.2";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           doCheck = false; # cross-compiled test binaries can't run on the build host
@@ -42,7 +42,7 @@
       # metadata, it doesn't compile the binary.
       sbom = pkgs.rustPlatform.buildRustPackage {
         pname = "tree-police-sbom";
-        version = "0.1.0";
+        version = "0.1.2";
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
         nativeBuildInputs = [pkgs.cargo-cyclonedx];

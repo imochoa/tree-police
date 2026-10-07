@@ -228,7 +228,7 @@ Used by:
 ### Apache License 2.0
 
 Used by:
-- [tree-police 0.1.0](https://crates.io/crates/tree-police)
+- [tree-police 0.1.2](https://crates.io/crates/tree-police)
 
 ```
                                  Apache License
