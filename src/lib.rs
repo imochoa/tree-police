@@ -8,11 +8,13 @@
 //! captures (used only to drive predicates) are named with a leading `_` and
 //! are not reported.
 
+pub mod config;
 pub mod registry;
 pub mod report;
 pub mod rules;
 pub mod scan;
 pub mod severity;
+pub mod suppress;
 pub mod tree_view;
 
 pub use report::Format;

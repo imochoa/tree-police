@@ -9,6 +9,7 @@ use clap::{ArgAction, Parser};
 use tracing_subscriber::EnvFilter;
 use tree_sitter::{Parser as TsParser, Query};
 
+use tree_police::config::{Catalog, Config};
 use tree_police::registry;
 use tree_police::report::{self, Format};
 use tree_police::rules;
@@ -107,6 +108,14 @@ struct Args {
     #[arg(long, default_value = ".tree-police")]
     rules_dir: PathBuf,
 
+    /// Config file scoping rules to paths and overriding severities (see
+    /// README "Config file"). Defaults to `<rules-dir>/config.toml` if that
+    /// exists; globs there are relative to the rules dir's parent (the repo
+    /// root for `.tree-police/`), and to this file's own directory when it
+    /// is passed explicitly.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
     /// Increase logging verbosity (-v = info, -vv = debug, -vvv = trace).
     #[arg(short, long, action = ArgAction::Count)]
     verbose: u8,
@@ -175,7 +184,12 @@ fn run(args: Args) -> Result<i32> {
         respect_gitignore: !args.no_ignore,
         hidden: args.hidden,
     };
-    let (mut findings, stats) = scan::scan(&args.paths, &ruleset, &opts)?;
+    let catalog = Catalog::from_ruleset(&ruleset);
+    let config = match &args.config {
+        Some(path) => Config::load_explicit(path, &catalog)?,
+        None => Config::load_default(&args.rules_dir, &catalog)?,
+    };
+    let (mut findings, stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
 
     if let Some(min) = args.min_severity {
         findings.retain(|f| f.severity >= min);
