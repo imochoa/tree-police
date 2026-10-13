@@ -207,3 +207,232 @@ fn ad_hoc_query_always_exits_zero_regardless_of_matches() {
         .success()
         .stdout(predicate::str::contains("No matches"));
 }
+
+// --- Suppression comments and the config file ------------------------------
+//
+// These build a throwaway repo in a temp dir and run from inside it, since
+// both features are about paths and per-file content.
+
+fn temp_repo(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("temp dir");
+    for (rel, contents) in files {
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    dir
+}
+
+/// `(rule_id, line, severity)` for every finding, scanning `.` from `dir`.
+fn findings_in(dir: &tempfile::TempDir, extra: &[&str]) -> Vec<(String, u64, String)> {
+    let output = tree_police()
+        .current_dir(dir.path())
+        .args(["--format", "json", "--fail-on", "none"])
+        .args(extra)
+        .arg(".")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("valid JSON");
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["rule_id"].as_str().unwrap().to_string(),
+                f["line"].as_u64().unwrap(),
+                f["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn rule_lines(findings: &[(String, u64, String)], rule: &str) -> Vec<u64> {
+    findings
+        .iter()
+        .filter(|(r, _, _)| r == rule)
+        .map(|(_, l, _)| *l)
+        .collect()
+}
+
+#[test]
+fn inline_suppressions_cover_only_their_line_and_selectors() {
+    let repo = temp_repo(&[(
+        "a.py",
+        "print(1)  # tree-police: ignore\n\
+         print(2)  # tree-police: ignore[forbidden_print] -- intentional\n\
+         print(3)  # tree-police: ignore[category:forbidden]\n\
+         print(4)  # tree-police: ignore[eval_exec_usage]\n\
+         # tree-police: ignore-next-line[forbidden_print]\n\
+         print(6)\n\
+         print(7)\n\
+         x = \"tree-police: ignore\"; print(8)\n",
+    )]);
+    let findings = findings_in(&repo, &[]);
+    // 4: selector names a different rule; 7: next-line only reaches line 6;
+    // 8: the marker is in a string literal, not a comment.
+    assert_eq!(rule_lines(&findings, "forbidden_print"), vec![4, 7, 8]);
+}
+
+#[test]
+fn file_suppression_applies_anywhere_in_the_file() {
+    let repo = temp_repo(&[
+        (
+            "a.py",
+            "print(1)\n# tree-police: ignore-file[forbidden_print]\nprint(3)\n",
+        ),
+        ("b.py", "print(1)\n"),
+        (
+            "main.tf",
+            "# tree-police: ignore-file\nresource \"aws_s3_bucket\" \"x\" {\n  bucket = \"MyBucket\"\n}\n",
+        ),
+    ]);
+    let findings = findings_in(&repo, &[]);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(rule_lines(&findings, "forbidden_print"), vec![1]);
+}
+
+#[test]
+fn unknown_suppression_selector_warns_and_does_not_suppress() {
+    let repo = temp_repo(&[("a.py", "print(1)  # tree-police: ignore[no_such_rule]\n")]);
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("forbidden_print"))
+        .stderr(predicate::str::contains("unknown rule ID \"no_such_rule\""));
+}
+
+#[test]
+fn pretty_summary_reports_suppressed_count() {
+    let repo = temp_repo(&[("a.py", "print(1)  # tree-police: ignore\n")]);
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 suppressed"));
+}
+
+const SCOPED_CONFIG: &str = r#"
+[[scope]]
+rules = ["forbidden_print"]
+exclude = ["tests/**"]
+
+[[scope]]
+rules = ["category:security"]
+paths = ["src/"]
+
+[[override]]
+rules = ["forbidden_print"]
+paths = ["legacy/**"]
+severity = "log"
+"#;
+
+const PRINT_AND_EVAL: &str = "print(1)\neval(\"x\")\n";
+
+#[test]
+fn config_scopes_rules_and_overrides_severity_by_path() {
+    let repo = temp_repo(&[
+        (".tree-police/config.toml", SCOPED_CONFIG),
+        ("src/a.py", PRINT_AND_EVAL),
+        ("tests/test_a.py", PRINT_AND_EVAL),
+        ("legacy/old.py", PRINT_AND_EVAL),
+    ]);
+    let output = tree_police()
+        .current_dir(repo.path())
+        .args(["--format", "json", "--fail-on", "none", "."])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let mut got: Vec<(String, String, String)> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["file"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches("./")
+                    .to_string(),
+                f["rule_id"].as_str().unwrap().to_string(),
+                f["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    let expected = [
+        ("legacy/old.py", "forbidden_print", "log"),
+        ("src/a.py", "eval_exec_usage", "error"),
+        ("src/a.py", "forbidden_print", "warning"),
+    ];
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
+        .collect();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn config_globs_are_relative_to_repo_root_not_cwd() {
+    let repo = temp_repo(&[
+        (".tree-police/config.toml", SCOPED_CONFIG),
+        ("tests/test_a.py", "print(1)\n"),
+    ]);
+    // Scanning from the root by a path deeper than the glob still matches.
+    tree_police()
+        .current_dir(repo.path())
+        .arg("tests/test_a.py")
+        .assert()
+        .success();
+    // Explicit --config: globs are relative to that file's own directory.
+    let repo = temp_repo(&[
+        ("conf/tp.toml", SCOPED_CONFIG),
+        ("conf/tests/test_a.py", "print(1)\n"),
+        ("tests/test_a.py", "print(1)\n"),
+    ]);
+    let findings = tree_police()
+        .current_dir(repo.path())
+        .args(["--config", "conf/tp.toml", "--fail-on", "none", "."])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(findings).unwrap();
+    assert!(!text.contains("conf/tests/test_a.py"), "{text}");
+    assert!(text.contains("tests/test_a.py"), "{text}");
+}
+
+#[test]
+fn config_with_unknown_rule_is_an_internal_error() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "[[scope]]\nrules = [\"no_such_rule\"]\nexclude = [\"x\"]\n",
+        ),
+        ("a.py", "print(1)\n"),
+    ]);
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown rule ID \"no_such_rule\""));
+}
+
+#[test]
+fn explicit_missing_config_is_an_error() {
+    tree_police()
+        .args(["--config", "does-not-exist.toml", PY_CLEAN])
+        .assert()
+        .code(2);
+}

@@ -98,6 +98,76 @@ with the built-in ruleset automatically — no fork, no image rebuild:
 Override the lookup path with `--rules-dir <dir>` if you'd rather keep it
 somewhere else.
 
+## Config file
+
+By default every rule runs on every file of its language. A
+`.tree-police/config.toml` (next to any repo-local rules) restricts where
+rules run and overrides their severity per path:
+
+```toml
+# Only run the temporal rules under src/workflows/.
+[[scope]]
+rules = ["category:temporal"]
+paths = ["src/workflows/"]
+
+# Run forbidden_print everywhere except tests and scripts.
+[[scope]]
+rules   = ["forbidden_print"]
+exclude = ["tests/**", "scripts/"]
+
+# Downgrade security findings to `log` in legacy code (still reported).
+[[override]]
+rules    = ["category:security"]
+paths    = ["legacy/**"]
+severity = "log"
+```
+
+- `rules` takes rule IDs, `category:<name>`, or `file:<query-file-name>`
+  (e.g. `file:no-foo-py.scm`). Unknown names are an error (exit 2), so a
+  typo can't silently match nothing; see `--list-rules`.
+- **`[[scope]]`**: `paths` is an allowlist and `exclude` a denylist (at
+  least one of them is required). If several scopes select the same rule,
+  a finding has to pass all of them.
+- **`[[override]]`**: `severity` is required. `paths`/`exclude` pick which
+  files the override covers, but they never stop a rule from running. When
+  several overrides match, the last one wins.
+- Languages are handled for you: a rule only ever runs on files of its own
+  language, so globs don't need extensions (`src/**` is enough). A glob
+  without `**` also matches everything under it, like `.gitignore` (`tests`
+  = `tests/` = `tests/**`).
+- Globs are relative to the directory that *contains* `.tree-police/`
+  (normally the repo root), whatever directory you run from. If you pass
+  `--config FILE` instead, globs are relative to `FILE`'s directory.
+- The config only filters findings. Every rule still runs, so `--rule`,
+  `--category` and `--min-severity` still apply on top of it.
+
+## Suppressing findings
+
+For one-off exceptions, put a directive in a comment. It works in any
+language's comment syntax:
+
+```python
+print(x)  # tree-police: ignore[forbidden_print] -- CLI entry point
+
+# tree-police: ignore-next-line[category:security]
+eval(trusted_expr)
+
+# tree-police: ignore-file[todo]
+```
+
+| Directive | Suppresses findings… |
+| --- | --- |
+| `tree-police: ignore` | that start on the comment's own line |
+| `tree-police: ignore-next-line` | that start on the line after the comment |
+| `tree-police: ignore-file` | anywhere in the file, wherever the comment is |
+
+The `[...]` list takes the same selectors as the config file. Leave it out
+to suppress every rule. Anything after the directive, such as a reason, is
+ignored. Only real comments count, so the same text inside a string literal
+does nothing. An unknown selector prints a warning on stderr and suppresses
+nothing; it never falls back to "every rule". The pretty report's summary
+says how many findings were suppressed.
+
 ## What's covered
 
 Rules exist today for **Python** (`forbidden`, `security`, `temporal`, `web`

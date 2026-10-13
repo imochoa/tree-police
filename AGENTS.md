@@ -59,7 +59,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── pyproject.toml             # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
 ├── .pre-commit-hooks.yaml     # makes this repo usable as a pre-commit `repo:` source
 ├── .github/workflows/         # image (ghcr.io), CLI tarballs (GitHub Release), wheels (PyPI)
-├── src/                       # main, registry, rules, scan, report, severity
+├── src/                       # main, registry, rules, scan, report, severity, config, suppress
 ├── tests/cli.rs               # black-box CLI tests
 ├── tests/query_cases.rs       # per-rule annotated fixture tests (see below)
 ├── .envrc                     # direnv: `use flake`
@@ -134,6 +134,22 @@ Adding just the grammar + registry entry with no rule file yet is fine and
 already done for several languages (see "What this is") — it costs nothing
 at scan time (files with no rules for their language are skipped) and means
 a future rule file needs no Cargo/registry change.
+
+## Path scoping and suppressions
+
+`src/config.rs` loads `.tree-police/config.toml` (or `--config FILE`). In it,
+`[[scope]]` entries restrict the selected rules to `paths` and/or keep them
+out of `exclude`, and `[[override]]` entries change severity per path.
+`src/suppress.rs` reads `tree-police: ignore` / `ignore-next-line` /
+`ignore-file` directives from comment nodes. Both run per file inside
+`scan::scan_file`, after matching. Selectors (`rule_id`,
+`category:<name>`, `file:<query-file-name>`) are checked against
+`config::Catalog`. An unknown selector is a hard error in the config but
+only a warning in a comment. User docs are in README "Config file" and
+"Suppressing findings".
+
+Renaming a rule ID or category also breaks any config file or suppression
+comment that refers to it, which is one more reason to keep them stable.
 
 ## Gotchas
 

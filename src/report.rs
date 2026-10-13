@@ -95,11 +95,16 @@ fn render_pretty(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) ->
 
 fn render_summary(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) -> Result<()> {
     writeln!(w)?;
+    let suppressed = match stats.suppressed {
+        0 => String::new(),
+        n => format!(" {n} suppressed by tree-police: ignore comments."),
+    };
     if findings.is_empty() {
         writeln!(
             w,
-            "{}",
-            format!("No findings. Scanned {} file(s).", stats.files_scanned).green()
+            "{}{}",
+            format!("No findings. Scanned {} file(s).", stats.files_scanned).green(),
+            suppressed.dimmed(),
         )?;
         return Ok(());
     }
@@ -117,13 +122,14 @@ fn render_summary(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) -
 
     writeln!(
         w,
-        "{} {} error(s), {} warning(s), {} log(s) across {} file(s) (scanned {}).",
+        "{} {} error(s), {} warning(s), {} log(s) across {} file(s) (scanned {}).{}",
         "Summary:".bold(),
         errors.to_string().red().bold(),
         warnings.to_string().yellow().bold(),
         logs.to_string().cyan().bold(),
         stats.files_with_findings,
         stats.files_scanned,
+        suppressed.dimmed(),
     )?;
     Ok(())
 }
