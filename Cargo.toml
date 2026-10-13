@@ -4,6 +4,7 @@ version = "0.1.2"
 edition = "2021"
 description = "Ripgrep-style AST scanner with baked-in tree-sitter queries and severity levels"
 license = "Apache-2.0"
+repository = "https://github.com/imochoa/tree-police"
 
 [[bin]]
 name = "tree-police"

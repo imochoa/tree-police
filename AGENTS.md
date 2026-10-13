@@ -44,9 +44,10 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 | `just test` | `cargo test` — unit tests + black-box CLI tests (`tests/cli.rs`) + query-case tests. |
 | `just docker-build` | `nix build .#tree-police-static`, then `podman build` a `FROM scratch` image. |
 | `just docker-run [args]` | Run the built image (`-t` for color; see the recipe comment). |
+| `just wheel` | `maturin build --release`: the binary as a Python wheel in `target/wheels/` (see `pyproject.toml`). |
 | `just third-party-licenses` | Regenerate `THIRD-PARTY-LICENSES.md` from `Cargo.lock`. |
 | `just sbom` | Build a CycloneDX SBOM (`sbom.cdx.json`) via Nix. |
-| `just release X.Y.Z` | Bump the version, run the test/lint gate, commit, tag `vX.Y.Z`, and push — triggers the Docker + GitHub Release workflows. Requires a clean `main` with no existing tag of that name. |
+| `just release X.Y.Z` | Bump the version, run the test/lint gate, commit, tag `vX.Y.Z`, and push — triggers the Docker, GitHub Release and PyPI workflows. Requires a clean `main` with no existing tag of that name. |
 
 ## Layout
 
@@ -55,8 +56,9 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── flake.nix                 # devShell: Rust toolchain; tree-police-static (musl) package
 ├── Cargo.toml / Cargo.lock    # crate manifest (lockfile committed)
 ├── Dockerfile / .dockerignore
+├── pyproject.toml             # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
 ├── .pre-commit-hooks.yaml     # makes this repo usable as a pre-commit `repo:` source
-├── .github/workflows/         # builds + publishes the image to ghcr.io on push/tag
+├── .github/workflows/         # image (ghcr.io), CLI tarballs (GitHub Release), wheels (PyPI)
 ├── src/                       # main, registry, rules, scan, report, severity
 ├── tests/cli.rs               # black-box CLI tests
 ├── tests/query_cases.rs       # per-rule annotated fixture tests (see below)
