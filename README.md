@@ -52,7 +52,19 @@ rules/categories, and troubleshooting.
 
 ## Standalone CLI
 
-Prefer running it directly over Docker/pre-commit? Every
+Install it from PyPI. The wheel only wraps the native binary, so there's no
+Python code involved and no Rust toolchain is needed:
+
+```bash
+uv tool install tree-police    # or: pipx install tree-police / pip install tree-police
+tree-police --list-rules
+```
+
+Wheels are built for Linux (x86_64/aarch64, glibc and musl) and macOS
+(Intel/Apple Silicon). On any other platform pip falls back to the sdist,
+which needs Rust and a C/C++ compiler to build.
+
+Or download a binary directly. Every
 [release](https://github.com/imochoa/tree-police/releases) attaches prebuilt
 binaries for Linux (amd64/arm64, static musl) and macOS (Intel/Apple
 Silicon), plus a checksums file and a CycloneDX SBOM. Every grammar and query

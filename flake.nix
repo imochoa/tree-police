@@ -83,6 +83,9 @@
           # `just third-party-licenses` -- regenerates THIRD-PARTY-LICENSES.md
           pkgs.cargo-about
 
+          # `just wheel` -- packages the binary as a Python wheel (pyproject.toml)
+          pkgs.maturin
+
           # Pre-commit hooks (.pre-commit-config.yaml) run these via
           # `language: system`, i.e. straight off this devShell's PATH --
           # no separate per-hook environment to install.
