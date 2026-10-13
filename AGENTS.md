@@ -60,7 +60,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── python/pyproject.toml      # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
 ├── .pre-commit-hooks.yaml     # `tree-police` (python, PyPI wheel) + `tree-police-docker` hooks
 ├── .github/workflows/         # image (ghcr.io), CLI tarballs (GitHub Release), wheels (PyPI)
-├── src/                       # main, registry, rules, scan, report, severity, config, suppress
+├── src/                       # main, registry, rules, scan, report, severity, config, suppress, baseline, casetest
 ├── tests/cli.rs               # black-box CLI tests
 ├── tests/query_cases.rs       # per-rule annotated fixture tests (see below)
 ├── .envrc                     # direnv: `use flake`
@@ -117,6 +117,11 @@ there's no separate negative-assertion syntax, and no need for one. Put each
 rule's positive example directly above its negative counterexample (not in
 a separate "clean" section at the bottom); see any file under
 `tests/query-cases/python/` for the pattern.
+
+The assertion parsing and checking live in `src/casetest.rs`, shared with
+`tree-police --test`, which runs the same check over a repo's own
+`.tree-police/tests/` fixtures (any line-comment syntax, full ruleset, strays
+checked for repo-local rules only).
 
 It runs the **compiled `tree-police` matcher** directly (via
 `tree_police::rules::load()`), not a subprocess. It caught a real bug when

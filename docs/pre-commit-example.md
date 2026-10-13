@@ -50,17 +50,18 @@ tree-police (AST pattern scan)...........................................Failed
 - duration: 0.42s
 - exit code: 1
 
-app.py
-  5:5  error    os_system_usage  os.system() invokes a shell; prefer subprocess
+app.py:5:5: error os_system_usage  os.system() invokes a shell; prefer subprocess
 
 Summary: 1 error(s), 0 warning(s), 0 log(s) across 1 file(s) (scanned 1).
 ```
 
 The hook's default `entry` (see
 [`.pre-commit-hooks.yaml`](../.pre-commit-hooks.yaml)) passes
-`--fail-on error`, so only `error`-severity findings block the commit;
-`warning`/`log` findings are still printed but don't fail the hook. Override
-this per-repo with `args:`:
+`--fail-on error --format compact` with `verbose: true`: only
+`error`-severity findings block the commit, and `warning`/`log` findings are
+printed one line each on every run, even when the hook passes. Your `args:`
+are appended after those flags and a later flag wins, so override only what
+you want to change:
 
 ```yaml
 repos:
@@ -68,12 +69,14 @@ repos:
     rev: v0.2.0
     hooks:
       - id: tree-police
-        args: ["--fail-on", "warning", "--format", "json"]
+        args: ["--fail-on", "warning", "--format", "pretty"]
 ```
 
-(`args` here *replace* the hook's defaults, they don't merge with them —
-if you add `args`, also repeat `--fail-on error` if you still want that
-threshold.)
+Set `verbose: false` on the hook to only see output when it fails.
+
+To adopt the hook on a codebase with many existing findings, commit a
+baseline (`tree-police --update-baseline .`, see the README's "Baseline"
+section) so only new findings show up.
 
 ## 3. Adding your own rules, no fork required
 

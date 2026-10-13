@@ -573,3 +573,133 @@ fn example_config_is_valid() {
         .assert()
         .success();
 }
+
+// --- Output formats, baseline, fixture tests --------------------------------
+
+#[test]
+fn compact_and_summary_formats() {
+    tree_police()
+        .args(["--format", "compact", "--fail-on", "none", PY_VIOLATIONS])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::is_match(
+                r"(?m)^tests/fixtures/python/violations\.py:1:1: warning forbidden_print",
+            )
+            .unwrap(),
+        )
+        .stdout(predicate::str::contains("Summary:"));
+    tree_police()
+        .args(["--format", "summary", "--fail-on", "none", PY_VIOLATIONS])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"(?m)^\s+\d+\s+1\s+warning\s+forbidden_print").unwrap());
+}
+
+#[test]
+fn a_later_flag_overrides_an_earlier_one() {
+    // pre-commit appends `args` after the hook's own entry flags.
+    tree_police()
+        .args([
+            "--format",
+            "compact",
+            "--fail-on",
+            "error",
+            "--format",
+            "json",
+            "--fail-on",
+            "none",
+        ])
+        .arg(PY_SECURITY)
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("["));
+}
+
+#[test]
+fn baseline_hides_known_findings_and_reports_new_ones() {
+    let repo = temp_repo(&[("a.py", "print(1)\n"), ("b.py", "print(2)\n")]);
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--update-baseline", "."])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote 2 finding(s)"));
+    assert!(repo.path().join(".tree-police/baseline.json").is_file());
+
+    // Known finding moved down a line, plus a new one: only the new one shows.
+    std::fs::write(repo.path().join("a.py"), "x = 1\nprint(1)\nprint(3)\n").unwrap();
+    assert_eq!(
+        findings_in(&repo, &[]),
+        vec![("forbidden_print".to_string(), 3, "warning".to_string())]
+    );
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("2 baselined"));
+    assert_eq!(findings_in(&repo, &["--no-baseline"]).len(), 3);
+
+    // Scanning a single file by path still matches its baseline entry.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--fail-on", "none", "b.py"])
+        .assert()
+        .stdout(predicate::str::contains("No findings"));
+
+    // A partial update keeps the other files' entries.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--update-baseline", "a.py"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote 3 finding(s)"));
+}
+
+#[test]
+fn fixture_tests_pass_fail_and_stay_out_of_normal_scans() {
+    let rule = "((call function: (identifier) @_f) @no_foo (#eq? @_f \"foo\"))\n";
+    let repo = temp_repo(&[
+        (".tree-police/foo-py.scm", rule),
+        (
+            ".tree-police/tests/foo.py",
+            "foo()\n# <- @no_foo\nbar()\nprint(1)\n",
+        ),
+        ("src/a.py", "x = 1\n"),
+    ]);
+    // print() is a built-in rule nobody asserted, so it isn't a stray.
+    tree_police()
+        .current_dir(repo.path())
+        .arg("--test")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "1 fixture(s), 1 assertion(s), 0 failure(s)",
+        ));
+
+    // Fixtures violate rules on purpose; a normal scan never reports them,
+    // even when pre-commit passes them by name.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--hidden", ".", ".tree-police/tests/foo.py"])
+        .assert()
+        .success();
+
+    std::fs::write(
+        repo.path().join(".tree-police/tests/foo.py"),
+        "foo()\nfoo()\n# <- @no_foo\nbar()\n# <- @no_foo\n",
+    )
+    .unwrap();
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--test", ".tree-police/tests"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "foo.py:1: unexpected @no_foo fired with no matching assertion",
+        ))
+        .stdout(predicate::str::contains(
+            "foo.py:5: expected @no_foo to fire on the line above",
+        ));
+}
