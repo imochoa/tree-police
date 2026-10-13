@@ -10,9 +10,11 @@ use rayon::prelude::*;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
+use crate::config::{Catalog, Config};
 use crate::registry::{self, LangSpec};
 use crate::rules::Ruleset;
 use crate::severity::Severity;
+use crate::suppress::Suppressions;
 
 /// One rule match at a source location.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -61,6 +63,8 @@ pub struct Match {
 pub struct ScanStats {
     pub files_scanned: usize,
     pub files_with_findings: usize,
+    /// Findings dropped by `tree-police: ignore…` comments.
+    pub suppressed: usize,
 }
 
 /// Filesystem-walk options.
@@ -79,9 +83,13 @@ impl Default for ScanOptions {
 }
 
 /// Scan `paths` and return findings (sorted by file, line, column) plus stats.
+/// `config` scopes rules to paths and overrides severities (see
+/// [`crate::config`]); suppression comments are honored (see
+/// [`crate::suppress`]).
 pub fn scan(
     paths: &[PathBuf],
     ruleset: &Ruleset,
+    config: &Config,
     opts: &ScanOptions,
 ) -> Result<(Vec<Finding>, ScanStats)> {
     if paths.is_empty() {
@@ -89,15 +97,20 @@ pub fn scan(
     }
 
     let files = collect_files(paths, ruleset, opts);
+    let catalog = Catalog::from_ruleset(ruleset);
 
-    let per_file: Vec<Vec<Finding>> = files
+    let per_file: Vec<(Vec<Finding>, usize)> = files
         .par_iter()
-        .map_init(Parser::new, |parser, path| scan_file(parser, path, ruleset))
+        .map_init(Parser::new, |parser, path| {
+            scan_file(parser, path, ruleset, config, &catalog)
+        })
         .collect();
 
     let mut findings = Vec::new();
     let mut files_with_findings = 0;
-    for file_findings in per_file {
+    let mut suppressed = 0;
+    for (file_findings, file_suppressed) in per_file {
+        suppressed += file_suppressed;
         if !file_findings.is_empty() {
             files_with_findings += 1;
         }
@@ -115,6 +128,7 @@ pub fn scan(
     let stats = ScanStats {
         files_scanned: files.len(),
         files_with_findings,
+        suppressed,
     };
     Ok((findings, stats))
 }
@@ -278,6 +292,7 @@ pub fn run_query(
     let stats = ScanStats {
         files_scanned: files.len(),
         files_with_findings,
+        suppressed: 0,
     };
     Ok((matches, stats))
 }
@@ -328,32 +343,40 @@ fn query_file(parser: &mut Parser, path: &Path, spec: &LangSpec, query: &Query) 
     findings
 }
 
-fn scan_file(parser: &mut Parser, path: &Path, ruleset: &Ruleset) -> Vec<Finding> {
+/// Findings for one file after config scoping and suppressions, plus how
+/// many findings suppression comments dropped.
+fn scan_file(
+    parser: &mut Parser,
+    path: &Path,
+    ruleset: &Ruleset,
+    config: &Config,
+    catalog: &Catalog,
+) -> (Vec<Finding>, usize) {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     let Some(spec) = registry::for_extension(ext) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     let Some(lang_rules) = ruleset.language(spec.name) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
 
     let source = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) => {
             tracing::warn!("skipping {}: {err}", path.display());
-            return Vec::new();
+            return (Vec::new(), 0);
         }
     };
 
     if parser.set_language(&spec.language()).is_err() {
         tracing::error!("could not load grammar for {}", spec.name);
-        return Vec::new();
+        return (Vec::new(), 0);
     }
     let Some(tree) = parser.parse(&source, None) else {
         tracing::warn!("failed to parse {}", path.display());
-        return Vec::new();
+        return (Vec::new(), 0);
     };
     let root = tree.root_node();
 
@@ -386,7 +409,10 @@ fn scan_file(parser: &mut Parser, path: &Path, ruleset: &Ruleset) -> Vec<Finding
             });
         }
     }
-    findings
+
+    config.apply(path, &mut findings);
+    let suppressed = Suppressions::collect(path, &tree, &source, catalog).apply(&mut findings);
+    (findings, suppressed)
 }
 
 /// Extract the source line containing `byte`, trailing whitespace trimmed.
