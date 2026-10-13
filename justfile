@@ -112,13 +112,17 @@ release version:
     sed -i.bak "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\";/version = \"$version\";/" flake.nix && rm flake.nix.bak
     # Root pyproject.toml: the pre-commit stub's own version and its wheel pin.
     sed -i.bak -e "s/^version = \".*\"/version = \"$version\"/" -e "s/\"tree-police==[^\"]*\"/\"tree-police==$version\"/" pyproject.toml && rm pyproject.toml.bak
+    # Pre-commit examples in the docs pin `rev: vX.Y.Z`; keep them on the new tag.
+    for f in README.md docs/pre-commit-example.md; do
+        sed -i.bak -E "s/rev: v[0-9]+\.[0-9]+\.[0-9]+/rev: $tag/" "$f" && rm "$f.bak"
+    done
 
     cargo build --release
     cargo test --release
     cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
     pre-commit run --all-files
 
-    git add Cargo.toml Cargo.lock flake.nix pyproject.toml THIRD-PARTY-LICENSES.md
+    git add Cargo.toml Cargo.lock flake.nix pyproject.toml README.md docs/pre-commit-example.md THIRD-PARTY-LICENSES.md
     git commit -m "Release $tag"
     git tag -a "$tag" -m "$tag"
     git push origin main

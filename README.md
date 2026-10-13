@@ -36,7 +36,7 @@ visible.
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/imochoa/tree-police
-    rev: v0.1.0  # pin a tag; see releases
+    rev: v0.2.0  # pin a tag; see releases
     hooks:
       - id: tree-police
 ```
