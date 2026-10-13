@@ -5,8 +5,8 @@
 A ripgrep-style linter that patrols source code for forbidden AST shapes,
 using [tree-sitter](https://tree-sitter.github.io/) queries baked into a
 single static binary. Built to run as a [pre-commit](https://pre-commit.com/)
-hook via a published Docker image — no Rust/Nix/tree-sitter toolchain
-required in the repos it scans.
+hook (a prebuilt PyPI wheel, or a Docker image) — no Rust/Nix/tree-sitter
+toolchain required in the repos it scans.
 
 Adapted from an internal hackathon proof of concept.
 
@@ -41,9 +41,12 @@ repos:
       - id: tree-police
 ```
 
-This pulls `ghcr.io/imochoa/tree-police` and runs it against every changed
-file in the commit; files whose extension isn't registered (see
-`src/registry.rs`) are silently skipped. Override severity/format via `args`,
+This installs the prebuilt `tree-police` wheel from PyPI into the hook's
+environment, so it only needs Python: no Docker and no Rust toolchain. It
+works with both pre-commit and [prek](https://github.com/j178/prek). The hook
+then runs against every changed file in the commit; files whose extension
+isn't registered (see `src/registry.rs`) are silently skipped. For the Docker
+image instead, use `id: tree-police-docker`. Override severity/format via `args`,
 e.g. `args: ["--min-severity", "warning"]`.
 
 See [`docs/pre-commit-example.md`](docs/pre-commit-example.md) for a full
@@ -52,7 +55,8 @@ rules/categories, and troubleshooting.
 
 ## Standalone CLI
 
-Install it from PyPI. The wheel only wraps the native binary, so there's no
+Install it from PyPI (the `tree_police` wheel built from
+`python/pyproject.toml`). The wheel only wraps the native binary, so there's no
 Python code involved and no Rust toolchain is needed:
 
 ```bash
