@@ -224,6 +224,13 @@ New to writing tree-sitter queries? See
 syntax reference (fields, captures, quantifiers, anchors, predicates) and
 tips for inspecting a file's AST before writing one.
 
+An Agent Skills-compatible workflow for structural searches and rule authoring
+is also available at
+[`skills/tree-sitter-queries/SKILL.md`](skills/tree-sitter-queries/SKILL.md).
+Copy that directory into your agent's skill location, or point your harness at
+it directly. It defaults to tree-police's built-in tree viewer and ad-hoc query
+mode, then covers promoting a tested query into a reusable rule.
+
 ## Local development
 
 ```bash
