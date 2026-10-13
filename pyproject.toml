@@ -1,33 +1,22 @@
-# Packages the `tree-police` binary as a Python wheel (no Python code, no
-# PyO3), the way ruff, uv and prek ship theirs: `pip install tree-police` /
-# `uv tool install tree-police` puts the binary on PATH. Built and published
-# by .github/workflows/pypi-release.yml; build locally with `just wheel`.
-# The version comes from Cargo.toml, so `just release` stays the one place
-# it's bumped.
+# The package pre-commit / prek install for this repo's `tree-police` hook
+# (.pre-commit-hooks.yaml, `language: python`). Hook installs run
+# `pip install .` on a clone of this repo, so this root package is
+# deliberately a stub: it contains nothing and only pins the prebuilt
+# `tree-police` wheel from PyPI, so hook users never compile Rust.
+#
+# The real wheel is built from python/pyproject.toml (maturin). The pin below
+# must equal Cargo.toml's version; `just release` bumps both, and
+# tests/packaging.rs fails if they drift.
 [build-system]
-requires = ["maturin>=1.9,<2"]
-build-backend = "maturin"
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
 
 [project]
-name = "tree-police"
-description = "Ripgrep-style AST scanner with baked-in tree-sitter queries and severity levels"
-readme = "README.md"
-license = "Apache-2.0"
-license-files = ["LICENSE-APACHE", "THIRD-PARTY-LICENSES.md"]
+name = "tree-police-pre-commit"
+version = "0.1.2"
+description = "pre-commit hook shim that installs the prebuilt tree-police wheel"
 requires-python = ">=3.8"
-dynamic = ["version"]
-keywords = ["linter", "tree-sitter", "pre-commit", "ast"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Environment :: Console",
-    "Intended Audience :: Developers",
-    "Programming Language :: Rust",
-    "Topic :: Software Development :: Quality Assurance",
-]
+dependencies = ["tree-police==0.1.2"]
 
-[project.urls]
-Repository = "https://github.com/imochoa/tree-police"
-Releases = "https://github.com/imochoa/tree-police/releases"
-
-[tool.maturin]
-bindings = "bin"
+[tool.hatch.build.targets.wheel]
+bypass-selection = true

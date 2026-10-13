@@ -25,10 +25,11 @@ query-test:
     cargo test --test query_cases
 
 # Build a release wheel of the binary for this machine (target/wheels/),
-# same packaging as .github/workflows/pypi-release.yml. Try it with
+# same packaging as .github/workflows/pypi-release.yml (python/pyproject.toml;
+# the root pyproject.toml is the pre-commit stub). Try it with
 #   uv tool install target/wheels/tree_police-*.whl
 wheel:
-    maturin build --release
+    cd python && maturin build --release
 
 # All tests: unit tests, black-box CLI tests (tests/cli.rs), and query-case
 # tests (tests/query_cases.rs).
@@ -109,13 +110,15 @@ release version:
 
     sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml && rm Cargo.toml.bak
     sed -i.bak "s/version = \"[0-9]*\.[0-9]*\.[0-9]*\";/version = \"$version\";/" flake.nix && rm flake.nix.bak
+    # Root pyproject.toml: the pre-commit stub's own version and its wheel pin.
+    sed -i.bak -e "s/^version = \".*\"/version = \"$version\"/" -e "s/\"tree-police==[^\"]*\"/\"tree-police==$version\"/" pyproject.toml && rm pyproject.toml.bak
 
     cargo build --release
     cargo test --release
     cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
     pre-commit run --all-files
 
-    git add Cargo.toml Cargo.lock flake.nix THIRD-PARTY-LICENSES.md
+    git add Cargo.toml Cargo.lock flake.nix pyproject.toml THIRD-PARTY-LICENSES.md
     git commit -m "Release $tag"
     git tag -a "$tag" -m "$tag"
     git push origin main

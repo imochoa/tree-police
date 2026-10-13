@@ -1,7 +1,7 @@
 name: PyPI release
 
 # Wheels that wrap the `tree-police` binary (maturin `bindings = "bin"`, see
-# pyproject.toml), so `pip install tree-police` / `uv tool install
+# python/pyproject.toml), so `pip install tree-police` / `uv tool install
 # tree-police` works without Docker or a Rust toolchain. Published only from
 # a version tag (same trigger as cli-release.yml). Pull requests that touch
 # the packaging, and manual runs, build and smoke-test every wheel without
@@ -12,6 +12,8 @@ on:
   pull_request:
     paths:
       - pyproject.toml
+      - python/**
+      - .pre-commit-hooks.yaml
       - .github/workflows/pypi-release.yml
   workflow_dispatch:
 
@@ -43,7 +45,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist
+          working-directory: python
+          args: --release --out ../dist
           sccache: "true"
 
       # The runner is glibc, so only the manylinux wheel installs on it.
@@ -54,6 +57,18 @@ jobs:
           .venv/bin/pip install --no-index --find-links dist tree-police
           .venv/bin/tree-police --version
           .venv/bin/tree-police --list-rules >/dev/null
+
+      # The `tree-police` hook (.pre-commit-hooks.yaml) installs the root
+      # pyproject.toml stub, which pins this version on PyPI. Point pip at the
+      # wheel just built instead, so the hook is tested before publishing.
+      - name: Pre-commit hook smoke test
+        if: matrix.target == 'x86_64' && matrix.manylinux == '2_28'
+        env:
+          PIP_FIND_LINKS: ${{ github.workspace }}/dist
+        run: |
+          .venv/bin/pip install pre-commit
+          .venv/bin/pre-commit try-repo . tree-police \
+            --files tests/fixtures/python/clean.py tests/fixtures/terraform/clean.tf
 
       - uses: actions/upload-artifact@v4
         with:
@@ -81,7 +96,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist
+          working-directory: python
+          args: --release --out ../dist
           sccache: "true"
 
       - name: Smoke test
@@ -107,7 +123,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist
+          working-directory: python
+          args: --out ../dist
 
       - uses: actions/upload-artifact@v4
         with:

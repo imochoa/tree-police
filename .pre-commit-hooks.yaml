@@ -1,9 +1,24 @@
+# Installs the prebuilt `tree-police` wheel from PyPI via the stub package in
+# the root pyproject.toml -- needs only Python, no Docker, no Rust toolchain.
 - id: tree-police
   name: tree-police (AST pattern scan)
   description: >-
     Scan source files for forbidden AST patterns via tree-sitter queries.
     Drop extra rules in a repo-local .tree-police/ directory to extend the
     built-in ruleset with no image rebuild.
+  entry: tree-police --fail-on error
+  language: python
+  pass_filenames: true
+  # The binary already scans files in parallel; one process per batch of
+  # filenames is plenty.
+  require_serial: true
+
+# Same scan via the ghcr.io image, for machines that prefer Docker over a
+# Python environment.
+- id: tree-police-docker
+  name: tree-police (AST pattern scan, Docker)
+  description: >-
+    Same as `tree-police`, run from the ghcr.io/imochoa/tree-police image.
   entry: ghcr.io/imochoa/tree-police:latest --fail-on error
   language: docker_image
   pass_filenames: true
