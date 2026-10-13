@@ -19,7 +19,7 @@
 //! drive predicates (`#eq?`, `#match?`, …) and are never reported. The single
 //! non-helper capture in a pattern is its rule ID.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -42,12 +42,17 @@ pub struct PatternMeta {
     pub description: Option<String>,
     /// Free-form grouping tag (e.g. "security", "naming"), shown in `--list-rules`.
     pub category: Option<String>,
+    /// Built-in pattern switched off because a repo-local rule file defines
+    /// the same rule ID (see [`load_with_extra`]).
+    pub replaced: bool,
 }
 
 /// A compiled query plus the metadata needed to report its matches.
 pub struct CompiledQuery {
     /// Source path relative to `queries/`, e.g. `rules-py.scm`.
     pub source_path: String,
+    /// Compiled into the binary (`queries/`) rather than read from a rules dir.
+    pub embedded: bool,
     pub query: Query,
     /// Indexed by `pattern_index`.
     patterns: Vec<PatternMeta>,
@@ -112,6 +117,10 @@ pub fn load() -> Result<Ruleset> {
 /// Compile every embedded `.scm` file plus, if `extra_dir` exists, every
 /// `.scm` file directly under it. A missing `extra_dir` is not an error --
 /// most repos won't have repo-local rules, and that's the common case.
+///
+/// A repo-local rule whose ID matches a built-in one *replaces* it: the
+/// built-in patterns with that ID are disabled. Without this both copies ran
+/// and every finding was reported twice.
 pub fn load_with_extra(extra_dir: Option<&Path>) -> Result<Ruleset> {
     let mut by_lang: HashMap<&'static str, Vec<CompiledQuery>> = HashMap::new();
 
@@ -125,7 +134,7 @@ pub fn load_with_extra(extra_dir: Option<&Path>) -> Result<Ruleset> {
         let source = file
             .contents_utf8()
             .ok_or_else(|| anyhow!("query file {label} is not valid UTF-8"))?;
-        let (spec, query) = compile_for_label(&label, source)?;
+        let (spec, query) = compile_for_label(&label, source, true)?;
         by_lang.entry(spec.name).or_default().push(query);
     }
 
@@ -142,7 +151,7 @@ pub fn load_with_extra(extra_dir: Option<&Path>) -> Result<Ruleset> {
                 let label = path.to_string_lossy().into_owned();
                 let source = fs::read_to_string(&path)
                     .with_context(|| format!("could not read query file {label}"))?;
-                let (spec, query) = compile_for_label(&label, &source)?;
+                let (spec, query) = compile_for_label(&label, &source, false)?;
                 by_lang.entry(spec.name).or_default().push(query);
             }
         }
@@ -150,6 +159,9 @@ pub fn load_with_extra(extra_dir: Option<&Path>) -> Result<Ruleset> {
 
     if by_lang.is_empty() {
         return Err(anyhow!("no queries were embedded into the binary"));
+    }
+    for queries in by_lang.values_mut() {
+        replace_overridden_builtins(queries);
     }
 
     // Keep `registry::LANGUAGES`'s stable order rather than the HashMap's.
@@ -164,10 +176,38 @@ pub fn load_with_extra(extra_dir: Option<&Path>) -> Result<Ruleset> {
     Ok(Ruleset { languages })
 }
 
+/// Disable built-in patterns whose rule ID a repo-local file also defines.
+fn replace_overridden_builtins(queries: &mut [CompiledQuery]) {
+    let local: HashSet<String> = queries
+        .iter()
+        .filter(|q| !q.embedded)
+        .flat_map(|q| q.patterns.iter().filter_map(|p| p.rule_id.clone()))
+        .collect();
+    if local.is_empty() {
+        return;
+    }
+    for cq in queries.iter_mut().filter(|q| q.embedded) {
+        for (i, meta) in cq.patterns.iter_mut().enumerate() {
+            let Some(id) = meta.rule_id.as_deref() else {
+                continue;
+            };
+            if local.contains(id) {
+                cq.query.disable_pattern(i);
+                meta.replaced = true;
+                tracing::info!("repo-local rule {id} replaces the built-in rule");
+            }
+        }
+    }
+}
+
 /// Resolve a query file's language from its `<label>-<code>.scm` name (the
 /// code is everything after the *last* `-`, or the whole stem if there is
 /// none) and compile it against that language's grammar.
-fn compile_for_label(label: &str, source: &str) -> Result<(&'static LangSpec, CompiledQuery)> {
+fn compile_for_label(
+    label: &str,
+    source: &str,
+    embedded: bool,
+) -> Result<(&'static LangSpec, CompiledQuery)> {
     let stem = Path::new(label)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -183,7 +223,7 @@ fn compile_for_label(label: &str, source: &str) -> Result<(&'static LangSpec, Co
     check_top_level_predicates(source).with_context(|| format!("invalid query {label}"))?;
     let query = Query::new(&spec.language(), source)
         .with_context(|| format!("failed to compile query {label}"))?;
-    Ok((spec, compile(label.to_string(), source, query)))
+    Ok((spec, compile(label.to_string(), source, query, embedded)))
 }
 
 /// Reject a predicate written at the top level of a query, outside any
@@ -235,7 +275,7 @@ pub fn check_top_level_predicates(source: &str) -> Result<()> {
     Ok(())
 }
 
-fn compile(source_path: String, source: &str, query: Query) -> CompiledQuery {
+fn compile(source_path: String, source: &str, query: Query, embedded: bool) -> CompiledQuery {
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -280,11 +320,13 @@ fn compile(source_path: String, source: &str, query: Query) -> CompiledQuery {
             severity,
             description,
             category,
+            replaced: false,
         });
     }
 
     CompiledQuery {
         source_path,
+        embedded,
         query,
         patterns,
         helper_captures,

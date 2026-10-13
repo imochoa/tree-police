@@ -52,8 +52,20 @@ fn json_output_carries_rule_and_severity() {
 
 #[test]
 fn terraform_naming_rule_fires() {
+    // The org-prefix rule is an opt-in example, not a built-in.
     tree_police()
         .args(["--fail-on", "none", TF_NAMING])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3_bucket_missing_prefix").not());
+    tree_police()
+        .args([
+            "--rules-dir",
+            "examples/tree-police",
+            "--fail-on",
+            "none",
+            TF_NAMING,
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("s3_bucket_missing_prefix"));
@@ -492,4 +504,72 @@ fn top_level_predicate_is_rejected_instead_of_ignored() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("bad-py.scm"));
+}
+
+#[test]
+fn repo_local_rule_replaces_builtin_with_the_same_id() {
+    // Same ID as the built-in forbidden_print, but only for print("x").
+    let repo = temp_repo(&[
+        (
+            ".tree-police/mine-py.scm",
+            "((call function: (identifier) @_f arguments: (argument_list (string) @_s)) @forbidden_print\n\
+             (#eq? @_f \"print\") (#eq? @_s \"\\\"x\\\"\")\n\
+             (#set! severity \"error\") (#set! description \"local version\"))\n",
+        ),
+        ("a.py", "print(\"x\")\nprint(\"y\")\n"),
+    ]);
+    let findings = findings_in(&repo, &[]);
+    // One finding (not two) on line 1, at the local rule's severity; line 2
+    // would only match the built-in, which is now off.
+    assert_eq!(
+        findings,
+        vec![("forbidden_print".to_string(), 1, "error".to_string())]
+    );
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--list-rules", "--format", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local version"))
+        .stdout(predicate::str::contains("Use the logger instead of print()").not());
+}
+
+#[test]
+fn config_disable_and_exclude() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "exclude = [\"vendor/\"]\ndisable = [\"category:security\"]\n",
+        ),
+        ("src/a.py", PRINT_AND_EVAL),
+        ("vendor/lib.py", PRINT_AND_EVAL),
+    ]);
+    let findings = findings_in(&repo, &[]);
+    assert_eq!(
+        findings,
+        vec![("forbidden_print".to_string(), 1, "warning".to_string())]
+    );
+    // Excluded files aren't scanned at all, even when passed explicitly.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--fail-on", "none", "src/a.py", "vendor/lib.py"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(scanned 1)"));
+}
+
+#[test]
+fn example_config_is_valid() {
+    tree_police()
+        .args([
+            "--rules-dir",
+            "examples/tree-police",
+            "--config",
+            "examples/tree-police/config.example.toml",
+            "--fail-on",
+            "none",
+            TF_NAMING,
+        ])
+        .assert()
+        .success();
 }

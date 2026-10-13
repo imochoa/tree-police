@@ -68,6 +68,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── queries/                   # flat: <label>-<code>.scm, see queries/README.md
 │   ├── rules-py.scm           # categories: forbidden, security, temporal, web, occt
 │   └── rules-tf.scm           # categories: naming, conventions, security
+├── examples/tree-police/      # opt-in example repo-local rules + config.example.toml
 ├── tests/fixtures/            # whole-file good/bad samples for tests/cli.rs
 │   ├── python/
 │   └── terraform/
@@ -140,7 +141,8 @@ a future rule file needs no Cargo/registry change.
 ## Path scoping and suppressions
 
 `src/config.rs` loads `.tree-police/config.toml` (or `--config FILE`). In it,
-`[[scope]]` entries restrict the selected rules to `paths` and/or keep them
+top-level `exclude` globs drop files before parsing (`scan::scan`), top-level
+`disable` selectors drop findings everywhere, `[[scope]]` entries restrict the selected rules to `paths` and/or keep them
 out of `exclude`, and `[[override]]` entries change severity per path.
 `src/suppress.rs` reads `tree-police: ignore` / `ignore-next-line` /
 `ignore-file` directives from comment nodes. Both run per file inside
@@ -172,7 +174,8 @@ comment that refers to it, which is one more reason to keep them stable.
 - Prefer declarative predicates (`#eq?`, `#match?`, `#not-match?`) over broad structural matches.
 - Capture names are the rule ID surfaced to users — make them descriptive (`hardcoded_provider_credentials`, not `bad1`).
 - Keep one logical rule per capture name; combine predicates rather than duplicating patterns.
-- Terraform rules are illustrative examples of naming/convention/security checks (e.g. a placeholder `acme-` bucket prefix, `-role`/`-sg` suffixes) — swap them for your own org's conventions rather than assuming they apply as-is.
+- Built-in rules must hold for any codebase. Org-specific conventions (a bucket prefix, a role-name suffix) go in `examples/tree-police/` as copyable repo-local rules, not in `queries/`: a placeholder like `acme-` fires on every real resource.
+- A repo-local rule with the same ID as a built-in one replaces it (`rules::replace_overridden_builtins` disables the built-in patterns). That's the supported way to retune a built-in rule.
 
 ## Credits
 

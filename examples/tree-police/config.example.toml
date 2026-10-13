@@ -1,0 +1,18 @@
+# Example `.tree-police/config.toml` (rename it to that when you copy this dir).
+# Globs are relative to the directory containing `.tree-police/`.
+
+# Never scan these (vendored or archived code). Skipped before parsing.
+exclude = ["vendor/", "archive/**"]
+
+# Turn rules off everywhere, by rule ID, category:<name> or file:<name>.
+disable = ["nested_ternary"]
+
+# Run the example naming rules only on the live stacks.
+[[scope]]
+rules = ["category:org-naming"]
+paths = ["terraform/live/"]
+
+# Report wildcard IAM resources but don't fail CI on them.
+[[override]]
+rules    = ["wildcard_iam_resource"]
+severity = "warning"
