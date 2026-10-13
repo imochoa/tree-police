@@ -24,6 +24,12 @@ scan-bin *args=".":
 query-test:
     cargo test --test query_cases
 
+# Build a release wheel of the binary for this machine (target/wheels/),
+# same packaging as .github/workflows/pypi-release.yml. Try it with
+#   uv tool install target/wheels/tree_police-*.whl
+wheel:
+    maturin build --release
+
 # All tests: unit tests, black-box CLI tests (tests/cli.rs), and query-case
 # tests (tests/query_cases.rs).
 test:
