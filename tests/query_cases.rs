@@ -163,3 +163,8 @@ fn python_temporal_patterns() {
 fn python_web_patterns() {
     run_query_cases("python", "rules", "web-patterns", "py");
 }
+
+#[test]
+fn terraform_variables_and_naming() {
+    run_query_cases("terraform", "rules", "variables-and-naming", "tf");
+}

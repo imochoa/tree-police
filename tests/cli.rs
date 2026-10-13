@@ -436,3 +436,60 @@ fn explicit_missing_config_is_an_error() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn list_rules_lists_a_multi_pattern_rule_once() {
+    let repo = temp_repo(&[(
+        ".tree-police/two-py.scm",
+        "((call function: (identifier) @_f) @two_shapes (#eq? @_f \"a\"))\n\
+         ((call function: (identifier) @_f) @two_shapes (#eq? @_f \"b\"))\n",
+    )]);
+    let output = tree_police()
+        .current_dir(repo.path())
+        .args(["--list-rules", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let count = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["rule_id"] == "two_shapes")
+        .count();
+    assert_eq!(count, 1);
+    tree_police()
+        .current_dir(repo.path())
+        .arg("--list-rules")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("two_shapes").count(1));
+}
+
+#[test]
+fn top_level_predicate_is_rejected_instead_of_ignored() {
+    tree_police()
+        .args([
+            "--query",
+            r#"(identifier) @x (#eq? @x "print")"#,
+            PY_VIOLATIONS,
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("top level"));
+    let repo = temp_repo(&[
+        (
+            ".tree-police/bad-py.scm",
+            "(identifier) @bad (#eq? @bad \"x\")\n",
+        ),
+        ("a.py", "x = 1\n"),
+    ]);
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("bad-py.scm"));
+}

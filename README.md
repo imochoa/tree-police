@@ -174,8 +174,8 @@ says how many findings were suppressed.
 
 ## What's covered
 
-Rules exist today for **Python** (`forbidden`, `security`, `temporal`, `web`
-categories) and **Terraform/HCL** (`naming`, `conventions`, `security`). Both
+Rules exist today for **Python** (`forbidden`, `security`, `temporal`, `web`,
+`occt` categories) and **Terraform/HCL** (`naming`, `conventions`, `security`). Both
 rule sets are a small illustrative starting point, not an exhaustive policy —
 extend them or add your own via a repo-local `.tree-police/` directory (see
 above).

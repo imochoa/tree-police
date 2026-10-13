@@ -3,6 +3,7 @@
 //! caller wraps it in an `anstream` stream so ANSI colors are stripped when the
 //! output is not a terminal or `NO_COLOR` is set.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -222,15 +223,21 @@ pub struct RuleInfo {
 }
 
 /// Flatten the embedded ruleset into a list, skipping anonymous (helper-only)
-/// patterns that have no reportable capture.
+/// patterns that have no reportable capture. A rule written as several
+/// patterns (alternative shapes sharing one capture name) is listed once,
+/// with the first pattern's metadata.
 fn rule_catalog(ruleset: &Ruleset) -> Vec<RuleInfo> {
     let mut rules = Vec::new();
     for lang in ruleset.languages() {
+        let mut seen = HashSet::new();
         for query in &lang.queries {
             for pattern in query.patterns() {
                 let Some(rule_id) = pattern.rule_id.clone() else {
                     continue;
                 };
+                if !seen.insert(rule_id.clone()) {
+                    continue;
+                }
                 rules.push(RuleInfo {
                     language: lang.spec.name,
                     query_file: query.source_path.clone(),
@@ -277,8 +284,14 @@ fn list_rules_pretty(ruleset: &Ruleset, w: &mut impl Write) -> Result<()> {
         // query file -- a language's rules now live in one file, with
         // `category` doing the classification a file split used to.
         let mut groups: Vec<(Option<&str>, Vec<&crate::rules::PatternMeta>)> = Vec::new();
+        let mut seen = HashSet::new();
         for query in &lang.queries {
             for pattern in query.patterns() {
+                if let Some(rule_id) = pattern.rule_id.as_deref() {
+                    if !seen.insert(rule_id) {
+                        continue;
+                    }
+                }
                 let category = pattern.category.as_deref();
                 match groups.iter_mut().find(|(c, _)| *c == category) {
                     Some((_, patterns)) => patterns.push(pattern),

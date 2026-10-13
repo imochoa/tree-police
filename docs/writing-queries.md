@@ -181,6 +181,11 @@ predicates like `#is?`/`#not-has-ancestor?` are silently treated as
 unsatisfied and drop the whole match**, not just the predicate; see the
 Gotchas in [`AGENTS.md`](../AGENTS.md#gotchas).
 
+A predicate must sit inside the same parenthesized group as the pattern, as in
+the examples above. Written at the top level, `(identifier) @x (#eq? @x "self")`
+is valid tree-sitter syntax but the predicate is attached to nothing, so every
+identifier matches. tree-police rejects that form with an error instead.
+
 ## Special nodes
 
 ```scheme
