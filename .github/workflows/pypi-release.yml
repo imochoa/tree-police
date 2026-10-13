@@ -1,0 +1,135 @@
+name: PyPI release
+
+# Wheels that wrap the `tree-police` binary (maturin `bindings = "bin"`, see
+# pyproject.toml), so `pip install tree-police` / `uv tool install
+# tree-police` works without Docker or a Rust toolchain. Published only from
+# a version tag (same trigger as cli-release.yml). Pull requests that touch
+# the packaging, and manual runs, build and smoke-test every wheel without
+# publishing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - pyproject.toml
+      - .github/workflows/pypi-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    # manylinux wheels are for glibc distros, musllinux ones for Alpine & co.
+    # Not the Nix musl-static build cli-release.yml uses: pip only installs a
+    # wheel whose platform tag matches the host, so glibc hosts need a
+    # manylinux-tagged build from maturin's manylinux containers. aarch64
+    # builds natively on GitHub's arm runner rather than cross-compiling the
+    # C/C++ grammars.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64, manylinux: "2_28" }
+          - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
+          - { runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: musllinux_1_2 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          sccache: "true"
+
+      # The runner is glibc, so only the manylinux wheel installs on it.
+      - name: Smoke test
+        if: matrix.manylinux != 'musllinux_1_2'
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --no-index --find-links dist tree-police
+          .venv/bin/tree-police --version
+          .venv/bin/tree-police --list-rules >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
+          path: dist/*.whl
+
+  macos:
+    # Same native Intel / Apple Silicon split as cli-release.yml.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15-intel, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      # Otherwise the wheel is tagged for the build host's macOS (a local
+      # build on macOS 14 came out as macosx_14_0) and pip refuses it on
+      # anything older. 11.0 is the first Apple Silicon release.
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'x86_64' && '10.13' || '11.0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+
+      - name: Smoke test
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --no-index --find-links dist tree-police
+          .venv/bin/tree-police --version
+          .venv/bin/tree-police --list-rules >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist/*.whl
+
+  sdist:
+    # Fallback for platforms without a wheel (needs Rust + a C/C++ compiler
+    # on the installing machine).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    # PyPI trusted publishing (OIDC) -- no API token stored in the repo. Needs
+    # a one-time trusted-publisher entry on PyPI for this repo, this workflow
+    # file and the `pypi` environment.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tree-police/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

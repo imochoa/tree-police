@@ -1,0 +1,33 @@
+# Packages the `tree-police` binary as a Python wheel (no Python code, no
+# PyO3), the way ruff, uv and prek ship theirs: `pip install tree-police` /
+# `uv tool install tree-police` puts the binary on PATH. Built and published
+# by .github/workflows/pypi-release.yml; build locally with `just wheel`.
+# The version comes from Cargo.toml, so `just release` stays the one place
+# it's bumped.
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tree-police"
+description = "Ripgrep-style AST scanner with baked-in tree-sitter queries and severity levels"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE-APACHE", "THIRD-PARTY-LICENSES.md"]
+requires-python = ">=3.8"
+dynamic = ["version"]
+keywords = ["linter", "tree-sitter", "pre-commit", "ast"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Repository = "https://github.com/imochoa/tree-police"
+Releases = "https://github.com/imochoa/tree-police/releases"
+
+[tool.maturin]
+bindings = "bin"
