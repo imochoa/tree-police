@@ -2,7 +2,7 @@
 
 A worked example for a repo that wants `tree-police` to scan every commit.
 This is the consumer's side — see the top-level [`README.md`](../README.md)
-for how the image itself gets built and published.
+for how the wheel and image get built and published.
 
 ## 1. Minimal setup
 
@@ -23,9 +23,10 @@ pre-commit install # one-time, per clone
 pre-commit run --all-files # first run: scan everything, not just staged changes
 ```
 
-`pre-commit` pulls `ghcr.io/imochoa/tree-police:latest` (a multi-arch image —
-works the same on amd64 and arm64 runners/laptops) and runs it against every
-file pre-commit hands it, which by default is every file changed in the
+`pre-commit` (or prek) installs the prebuilt `tree-police` wheel from PyPI
+into the hook's Python environment (Linux and macOS, amd64 and arm64; no
+Docker or Rust toolchain needed) and runs it against every file pre-commit
+hands it, which by default is every file changed in the
 commit. Files whose extension isn't registered in
 [`src/registry.rs`](../src/registry.rs) are silently skipped by the binary
 itself, so you don't need `files:`/`types_or:` filtering in your own config.
@@ -109,14 +110,22 @@ for the embedded ruleset, or check your own `.tree-police/*.scm` files'
 
 ## Troubleshooting
 
-- **"no such file or directory" mounting the repo** — pre-commit's
+- **Testing an unreleased checkout with `pre-commit try-repo`** — the
+  `tree-police` hook installs the root `pyproject.toml` stub, which pins
+  `tree-police==<version>` from PyPI, so a version that isn't published yet
+  won't resolve. Build a wheel (`just wheel` in this repo) and point pip at
+  it: `PIP_FIND_LINKS=/path/to/tree-police/target/wheels pre-commit try-repo
+  /path/to/tree-police tree-police --all-files` (prek uses uv, so set
+  `UV_FIND_LINKS` instead).
+- **A brand-new tag fails to install** — the hook can only install a version
+  once `pypi-release.yml` has published its wheels, which takes a few
+  minutes after the tag is pushed. Re-run once the release shows up on
+  PyPI.
+- **Using the Docker hook (`id: tree-police-docker`)** — pre-commit's
   `docker_image` language mounts your repo at `/src` and runs with that as
-  the working directory; this is automatic, nothing to configure. If you're
-  testing locally with `pre-commit try-repo` against a local checkout of
-  `tree-police` instead of the published image, pass a hook override with
-  `entry: tree-police:local ...` pointing at an image you've built yourself
-  (`just docker-build` in this repo), since `try-repo` doesn't publish or
-  pull anything for you.
+  the working directory; nothing to configure. To try a local image instead
+  of the published one, override `entry:` with an image you've built
+  yourself (`just docker-build` in this repo).
 - **Exit code 1 but no findings printed** — check `--min-severity`; findings
   below it are silently dropped from output but can still factor into
   `--fail-on` if you've also loosened that (unusual combination, but worth

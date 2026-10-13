@@ -44,7 +44,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 | `just test` | `cargo test` — unit tests + black-box CLI tests (`tests/cli.rs`) + query-case tests. |
 | `just docker-build` | `nix build .#tree-police-static`, then `podman build` a `FROM scratch` image. |
 | `just docker-run [args]` | Run the built image (`-t` for color; see the recipe comment). |
-| `just wheel` | `maturin build --release`: the binary as a Python wheel in `target/wheels/` (see `pyproject.toml`). |
+| `just wheel` | `maturin build --release`: the binary as a Python wheel in `target/wheels/` (see `python/pyproject.toml`). |
 | `just third-party-licenses` | Regenerate `THIRD-PARTY-LICENSES.md` from `Cargo.lock`. |
 | `just sbom` | Build a CycloneDX SBOM (`sbom.cdx.json`) via Nix. |
 | `just release X.Y.Z` | Bump the version, run the test/lint gate, commit, tag `vX.Y.Z`, and push — triggers the Docker, GitHub Release and PyPI workflows. Requires a clean `main` with no existing tag of that name. |
@@ -56,8 +56,9 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── flake.nix                 # devShell: Rust toolchain; tree-police-static (musl) package
 ├── Cargo.toml / Cargo.lock    # crate manifest (lockfile committed)
 ├── Dockerfile / .dockerignore
-├── pyproject.toml             # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
-├── .pre-commit-hooks.yaml     # makes this repo usable as a pre-commit `repo:` source
+├── pyproject.toml             # pre-commit hook stub: only pins the `tree-police` PyPI wheel
+├── python/pyproject.toml      # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
+├── .pre-commit-hooks.yaml     # `tree-police` (python, PyPI wheel) + `tree-police-docker` hooks
 ├── .github/workflows/         # image (ghcr.io), CLI tarballs (GitHub Release), wheels (PyPI)
 ├── src/                       # main, registry, rules, scan, report, severity, config, suppress
 ├── tests/cli.rs               # black-box CLI tests
@@ -152,6 +153,8 @@ Renaming a rule ID or category also breaks any config file or suppression
 comment that refers to it, which is one more reason to keep them stable.
 
 ## Gotchas
+
+- **The root `pyproject.toml` is not the real package.** pre-commit/prek install a `language: python` hook with `pip install .` on the repo root, so the root holds a stub that only depends on `tree-police==<version>` from PyPI. That way hook users get the prebuilt wheel instead of compiling 92 grammars. The maturin config lives in `python/pyproject.toml` (README and licenses are symlinked in). `just release` bumps the stub's pin, and `tests/packaging.rs` fails if it drifts from `Cargo.toml`. A new tag's hook can only be installed once `pypi-release.yml` has published that version.
 
 - **No regex lookaheads.** Rust's `regex` crate rejects `(?!...)` / `(?=...)`. Split into separate `#not-match?` / `#match?` predicates on the same capture instead.
 - **A predicate can't reference the capture on its own enclosing node.** A node's capture is only declared at its closing paren, so a predicate that's one of that node's *own children* comes before the capture exists, textually — `(node (child) (#pred? @x) ) @x` fails to compile ("Invalid capture name"). Wrap the captured node and the predicate together in one more pair of parens instead — `((node (child)) @x (#pred? @x ...))` — so they become siblings at the outer level, where ordering works. See `missing_route_validation` in `queries/rules-py.scm` (and `bare_except`/`todo`, which use the same wrapping).
