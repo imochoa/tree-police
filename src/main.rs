@@ -264,6 +264,7 @@ fn run_ad_hoc_query(
         None => scan::infer_language(paths, opts)?,
     };
 
+    rules::check_top_level_predicates(source)?;
     let query = Query::new(&spec.language(), source)
         .with_context(|| format!("failed to compile query for language {}", spec.name))?;
 

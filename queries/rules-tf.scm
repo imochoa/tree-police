@@ -56,6 +56,36 @@
   (#set! description "IAM role name must end with -role")
 ) @iam_role_missing_role_suffix
 
+; S3 bucket names with dots break virtual-hosted-style HTTPS (the wildcard
+; certificate doesn't cover the extra labels) and S3 Transfer Acceleration.
+
+(block
+  (identifier) @_block_type (#eq? @_block_type "resource")
+  (string_lit (template_literal) @_resource_type (#eq? @_resource_type "aws_s3_bucket"))
+  (body
+    (attribute
+      (identifier) @_attr (#eq? @_attr "bucket")
+      (expression (literal_value (string_lit
+        (template_literal) @_bucket_name (#match? @_bucket_name "\\."))))))
+  (#set! category "naming")
+  (#set! description "S3 bucket name contains dots, which break virtual-hosted-style HTTPS")
+) @s3_bucket_name_contains_dots
+
+; IAM Identity Center permission set names are capped at 32 characters by AWS;
+; longer ones only fail at apply time.
+
+(block
+  (identifier) @_block_type (#eq? @_block_type "resource")
+  (string_lit (template_literal) @_resource_type (#eq? @_resource_type "aws_ssoadmin_permission_set"))
+  (body
+    (attribute
+      (identifier) @_attr (#eq? @_attr "name")
+      (expression (literal_value (string_lit
+        (template_literal) @_pset_name (#match? @_pset_name "^.{33,}$"))))))
+  (#set! category "naming")
+  (#set! description "SSO permission set name exceeds the 32-character AWS limit")
+) @sso_permission_set_name_too_long
+
 ; ============================================================
 ; category: conventions
 ; ============================================================
@@ -169,6 +199,37 @@
   (#set! description "Use aws_s3_bucket_logging instead of an inline logging block")
 ) @s3_bucket_inline_logging
 
+; Variables and outputs without type/description. A text check on the block
+; (there's no "missing child" syntax), anchored to a line start so prose in a
+; description that mentions "type =" doesn't count.
+
+((block
+  (identifier) @_block_type (#eq? @_block_type "variable")) @untyped_terraform_variable
+  (#not-match? @untyped_terraform_variable "(?m)^\\s*type\\s*=")
+  (#set! category "conventions")
+  (#set! description "Variable has no type"))
+
+((block
+  (identifier) @_block_type (#eq? @_block_type "variable")) @undescribed_terraform_variable
+  (#not-match? @undescribed_terraform_variable "(?m)^\\s*description\\s*=")
+  (#set! category "conventions")
+  (#set! description "Variable has no description"))
+
+((block
+  (identifier) @_block_type (#eq? @_block_type "output")) @undescribed_terraform_output
+  (#not-match? @undescribed_terraform_output "(?m)^\\s*description\\s*=")
+  (#set! category "conventions")
+  (#set! description "Output has no description"))
+
+; aws_kms_key leaves automatic rotation off unless enable_key_rotation = true.
+
+((block
+  (identifier) @_block_type (#eq? @_block_type "resource")
+  (string_lit (template_literal) @_resource_type (#eq? @_resource_type "aws_kms_key"))) @kms_key_rotation_disabled
+  (#not-match? @kms_key_rotation_disabled "(?m)^\\s*enable_key_rotation\\s*=\\s*true")
+  (#set! category "conventions")
+  (#set! description "aws_kms_key without enable_key_rotation = true"))
+
 ; ============================================================
 ; category: security (all severity "error")
 ; ============================================================
@@ -226,14 +287,17 @@
   (#set! description "IAM policy grants wildcard resources (*)")
 ) @wildcard_iam_resource
 
-; Variable with "password", "secret", or "token" in the name that has a default value
+; Variable with "password", "secret", "token" or "api_key" in the name and a
+; non-empty default value. Empty defaults ("", {}, [], null) are the usual
+; "set it via TF_VAR_*" placeholder, not a hardcoded secret.
 (block
   (identifier) @_block_type (#eq? @_block_type "variable")
   (string_lit
     (template_literal) @_var_name (#match? @_var_name "(?i)password|secret|token|api_key"))
   (body
     (attribute
-      (identifier) @_attr (#eq? @_attr "default")))
+      (identifier) @_attr (#eq? @_attr "default")
+      (expression) @_value (#not-match? @_value "^(\"\"|\\{\\s*\\}|\\[\\s*\\]|null)$")))
   (#set! severity "error")
   (#set! category "security")
   (#set! description "Sensitive variable with a hardcoded default value")

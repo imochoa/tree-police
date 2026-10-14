@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use include_dir::{include_dir, Dir};
 use tree_sitter::Query;
 
@@ -180,9 +180,59 @@ fn compile_for_label(label: &str, source: &str) -> Result<(&'static LangSpec, Co
              (expected the name to end in one of: {known:?})"
         )
     })?;
+    check_top_level_predicates(source).with_context(|| format!("invalid query {label}"))?;
     let query = Query::new(&spec.language(), source)
         .with_context(|| format!("failed to compile query {label}"))?;
     Ok((spec, compile(label.to_string(), source, query)))
+}
+
+/// Reject a predicate written at the top level of a query, outside any
+/// parentheses: `(dictionary) @x (#eq? @x "{}")`. tree-sitter accepts it but
+/// attaches it to nothing, so the pattern matches as if the predicate weren't
+/// there. Confirmed by testing for plain nodes, fielded nodes and `[...]`
+/// alternations alike; the fix is always to wrap pattern and predicate in one
+/// more pair of parens: `((dictionary) @x (#eq? @x "{}"))`.
+pub fn check_top_level_predicates(source: &str) -> Result<()> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b';' => {
+                i = bytes[i..]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map_or(bytes.len(), |p| i + p);
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'(' | b'[' => {
+                if depth == 0 && bytes[i] == b'(' {
+                    let rest = source[i + 1..].trim_start();
+                    if rest.starts_with('#') {
+                        let line = source[..i].matches('\n').count() + 1;
+                        let pred: String =
+                            rest.chars().take_while(|c| !c.is_whitespace()).collect();
+                        bail!(
+                            "line {line}: predicate ({pred} ...) is at the top level, where \
+                             tree-sitter silently ignores it; wrap the pattern and its \
+                             predicates in one more pair of parens, e.g. \
+                             ((node) @capture ({pred} @capture ...))"
+                        );
+                    }
+                }
+                depth += 1;
+            }
+            b')' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 fn compile(source_path: String, source: &str, query: Query) -> CompiledQuery {
@@ -306,6 +356,26 @@ mod tests {
         let ruleset = load().expect("embedded queries should compile");
         assert!(ruleset.language("python").is_some());
         assert!(ruleset.language("terraform").is_some());
+    }
+
+    #[test]
+    fn top_level_predicates_are_rejected() {
+        for bad in [
+            "(dictionary) @x (#eq? @x \"{}\")",
+            "[(identifier) @x] (#eq? @x \"os\")",
+            "((a) @x (#eq? @x \"y\"))\n(b) @y\n  ( #match? @y \"z\")",
+        ] {
+            let err = check_top_level_predicates(bad).unwrap_err().to_string();
+            assert!(err.contains("top level"), "{bad}: {err}");
+        }
+        for good in [
+            "((dictionary) @x (#eq? @x \"{}\"))",
+            "([(identifier) @x] (#eq? @x \"os\"))",
+            "(call (identifier) @x (#eq? @x \"(#\")) ; (#eq? in a comment\n",
+            "(block (body (attribute (identifier) @_a (#eq? @_a \"x\")))) @rule",
+        ] {
+            check_top_level_predicates(good).unwrap_or_else(|e| panic!("{good}: {e}"));
+        }
     }
 
     #[test]

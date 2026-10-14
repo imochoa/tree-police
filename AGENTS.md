@@ -66,13 +66,14 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── .envrc                     # direnv: `use flake`
 ├── justfile                   # build / scan-bin / test / docker-* commands
 ├── queries/                   # flat: <label>-<code>.scm, see queries/README.md
-│   ├── rules-py.scm           # categories: forbidden, security, temporal, web
+│   ├── rules-py.scm           # categories: forbidden, security, temporal, web, occt
 │   └── rules-tf.scm           # categories: naming, conventions, security
 ├── tests/fixtures/            # whole-file good/bad samples for tests/cli.rs
 │   ├── python/
 │   └── terraform/
 ├── tests/query-cases/         # per-rule annotated fixtures for `just query-test`
-│   └── python/
+│   ├── python/
+│   └── terraform/
 ├── README.md
 └── queries/README.md          # rule conventions
 ```
@@ -158,6 +159,7 @@ comment that refers to it, which is one more reason to keep them stable.
 
 - **No regex lookaheads.** Rust's `regex` crate rejects `(?!...)` / `(?=...)`. Split into separate `#not-match?` / `#match?` predicates on the same capture instead.
 - **A predicate can't reference the capture on its own enclosing node.** A node's capture is only declared at its closing paren, so a predicate that's one of that node's *own children* comes before the capture exists, textually — `(node (child) (#pred? @x) ) @x` fails to compile ("Invalid capture name"). Wrap the captured node and the predicate together in one more pair of parens instead — `((node (child)) @x (#pred? @x ...))` — so they become siblings at the outer level, where ordering works. See `missing_route_validation` in `queries/rules-py.scm` (and `bare_except`/`todo`, which use the same wrapping).
+- **A predicate at the top level of a query is rejected.** tree-sitter accepts `(node) @x (#eq? @x "y")` (predicate outside any parens) but attaches the predicate to nothing, so the pattern matches everything; confirmed for plain nodes, fielded nodes and `[...]` alternations. `rules::check_top_level_predicates` now fails the load (and `--query`) with a pointer to the fix: wrap them, `((node) @x (#eq? @x "y"))`.
 - **Only literal strings are visible to queries.** Interpolated expressions (`"${var.env}-thing"`) aren't matched against string predicates — those need runtime validation elsewhere.
 - **`#set!` severity + `_`-helper captures are load-bearing.** The one non-`_` capture per pattern is the reported rule ID; severity comes from `(#set! severity …)` (default `warning`).
 - **Non-core predicates don't just go unenforced — they zero out the whole match.** `#not-has-ancestor?` and similar are silently treated as unsatisfied by the embedded `tree_sitter::QueryCursor` matcher, dropping the match entirely rather than ignoring the predicate. Confirmed by testing (`tests/query_cases.rs`), not documented upstream. Avoid them.

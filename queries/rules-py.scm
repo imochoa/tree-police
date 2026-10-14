@@ -62,14 +62,17 @@
   (#set! category "forbidden")
 )@nested_listcomp
 
-; Function calls: Match if there are MORE THAN 3 positional arguments (any type)
+; Calls with more than three positional arguments. Matched structurally:
+; `(expression)` excludes keyword arguments and `*`/`**` splats, and nested
+; calls/literals are single children (an earlier regex over the argument text
+; split on every comma, so `np.array([1, 2, 3, 4])` counted as four arguments
+; and `f(a, b, c, d, key=1)` as none).
 (call
-  arguments: (argument_list) @_args
-  (#match? @_args "^(\\(([^,=]+,){3,}[^,=]+\\))")  ; Matches 4+ positional args
+  arguments: (argument_list (expression) (expression) (expression) (expression))
   (#set! severity "error")
   (#set! category "forbidden")
   (#set! description "Too many positional arguments")
-)@too_many_posargs
+) @too_many_posargs
 
 ; ============================================================
 ; category: security (all severity "error")
@@ -256,3 +259,16 @@
   (#set! category "web")
   (#set! description "Avoid nested ternary operators; use an explicit if/else")
 ) @nested_ternary
+
+; ============================================================
+; category: occt (OpenCASCADE via OCP / pythonocc)
+; ============================================================
+
+; OCCT 7.8 removed TopoDS_Shape::HashCode (and the other HashCode(upper)
+; members); calls raise AttributeError at runtime. hash(shape) is the
+; IsSame-consistent replacement in OCP.
+((call function: (attribute attribute: (identifier) @_method) @occt_hashcode_call)
+  (#eq? @_method "HashCode")
+  (#set! severity "error")
+  (#set! category "occt")
+  (#set! description "HashCode() was removed in OCCT 7.8; use hash(shape)"))

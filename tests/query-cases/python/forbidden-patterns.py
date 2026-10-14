@@ -46,4 +46,11 @@ foo(1, 2, 3, 4)  # Matches (4 positional arguments)
 foo(x + 1, y, z, w)  # Matches (4 positional arguments, complex expressions)
 # <- @too_many_posargs
 foo(1, 2, 3)  # Excluded (3 positional arguments)
+foo(a, b, c, d, key=1)  # Matches (4 positional arguments plus a keyword)
+# <- @too_many_posargs
+foo(bar(a, b), c, d)  # Excluded (3 arguments; commas inside the nested call don't count)
+foo([1, 2, 3, 4])  # Excluded (1 argument)
+foo(*args, a, b, c)  # Excluded (a splat isn't a positional expression)
+foo(a, b, c, key=bar(1, 2, 3, 4))
+# <- @too_many_posargs
 
