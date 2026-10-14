@@ -13,10 +13,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tree-police-pre-commit"
-version = "0.2.0"
+version = "0.3.0"
 description = "pre-commit hook shim that installs the prebuilt tree-police wheel"
 requires-python = ">=3.8"
-dependencies = ["tree-police==0.2.0"]
+dependencies = ["tree-police==0.3.0"]
 
 [tool.hatch.build.targets.wheel]
 bypass-selection = true

@@ -228,7 +228,7 @@ Used by:
 ### Apache License 2.0
 
 Used by:
-- [tree-police 0.2.0](https://github.com/imochoa/tree-police)
+- [tree-police 0.3.0](https://github.com/imochoa/tree-police)
 
 ```
                                  Apache License
