@@ -8,6 +8,8 @@
 //! captures (used only to drive predicates) are named with a leading `_` and
 //! are not reported.
 
+pub mod baseline;
+pub mod casetest;
 pub mod config;
 pub mod registry;
 pub mod report;

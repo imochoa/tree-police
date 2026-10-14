@@ -46,8 +46,13 @@ environment, so it only needs Python: no Docker and no Rust toolchain. It
 works with both pre-commit and [prek](https://github.com/j178/prek). The hook
 then runs against every changed file in the commit; files whose extension
 isn't registered (see `src/registry.rs`) are silently skipped. For the Docker
-image instead, use `id: tree-police-docker`. Override severity/format via `args`,
-e.g. `args: ["--min-severity", "warning"]`.
+image instead, use `id: tree-police-docker`.
+
+Only `error` findings block the commit, but the hook always prints every
+finding, one line each (`--format compact`, `verbose: true`). `args` are
+appended to the hook's own flags and a later flag wins, so
+`args: ["--fail-on", "warning"]` or `args: ["--format", "pretty"]` override the
+defaults.
 
 See [`docs/pre-commit-example.md`](docs/pre-commit-example.md) for a full
 worked example: expected output on a failing commit, scoping to specific
@@ -185,6 +190,50 @@ ignored. Only real comments count, so the same text inside a string literal
 does nothing. An unknown selector prints a warning on stderr and suppresses
 nothing; it never falls back to "every rule". The pretty report's summary
 says how many findings were suppressed.
+
+## Baseline
+
+To adopt a rule on a codebase that already has hundreds of findings, record
+them once and only report new ones:
+
+```bash
+tree-police --update-baseline .     # writes .tree-police/baseline.json; commit it
+tree-police .                       # known findings hidden ("N baselined")
+tree-police --no-baseline .         # everything, e.g. for a cleanup pass
+```
+
+A finding is matched by file, rule and the text of its source line (trimmed),
+not by line number, so editing code above it doesn't resurface it; a second
+copy of the same line does show up. `--update-baseline` on a subset of files
+(say, the ones pre-commit passes) replaces only those files' entries. Use
+`--baseline FILE` for another location; its paths are then relative to that
+file's directory.
+
+## Testing repo-local rules
+
+Put annotated fixtures under `.tree-police/tests/` and run
+`tree-police --test` (or `--test DIR`). A `<- @rule_id` comment, in any line
+comment syntax, says that rule must fire on the line directly above:
+
+```python
+# .tree-police/tests/no-foo.py
+foo()
+# <- @no_foo
+bar()            # no annotation: no_foo must not fire here
+```
+
+It fails on a missing match and on an unannotated match of any repo-local rule
+(or any rule the fixture asserts), so one file covers both "should match" and
+"should not match". Built-in rules you don't assert are ignored. Normal scans
+skip `.tree-police/tests/` even when files there are passed explicitly, since
+fixtures break rules on purpose. Exit code 1 means a failure.
+
+## Output formats
+
+`--format pretty` (default, grouped by file with source excerpts), `compact`
+(one `path:line:col: severity rule  description` line per finding),
+`summary` (finding and file counts per rule, most frequent first; handy for
+sizing up a rollout), `json` and `jsonl`.
 
 ## What's covered
 

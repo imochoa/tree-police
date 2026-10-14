@@ -24,6 +24,12 @@ pub enum Format {
     Json,
     /// One JSON finding object per line.
     Jsonl,
+    /// One line per finding (`path:line:col: severity rule  description`)
+    /// plus the summary; suits pre-commit and editor problem matchers.
+    Compact,
+    /// Counts per rule (findings and files), most frequent first. For
+    /// sizing up a rollout rather than fixing individual findings.
+    Summary,
 }
 
 /// Render findings in the requested format.
@@ -35,6 +41,26 @@ pub fn render(
 ) -> Result<()> {
     match format {
         Format::Pretty => render_pretty(findings, stats, w),
+        Format::Compact => {
+            for f in findings {
+                let description = f
+                    .description
+                    .as_deref()
+                    .map(|d| format!("  {d}"))
+                    .unwrap_or_default();
+                writeln!(
+                    w,
+                    "{}:{}:{}: {} {}{description}",
+                    f.file.display(),
+                    f.line,
+                    f.column,
+                    colorize(f.severity, f.severity.as_str()),
+                    f.rule_id.bold(),
+                )?;
+            }
+            render_summary(findings, stats, w)
+        }
+        Format::Summary => render_rule_counts(findings, stats, w),
         Format::Json => {
             serde_json::to_writer_pretty(&mut *w, findings)?;
             writeln!(w)?;
@@ -94,12 +120,64 @@ fn render_pretty(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) ->
     render_summary(findings, stats, w)
 }
 
+/// One row per rule: severity, finding count, file count; most findings
+/// first, ties by rule ID.
+fn render_rule_counts(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) -> Result<()> {
+    struct Row<'a> {
+        rule: &'a str,
+        severity: Severity,
+        findings: usize,
+        files: HashSet<&'a Path>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for f in findings {
+        let row = match rows.iter_mut().position(|r| r.rule == f.rule_id) {
+            Some(i) => &mut rows[i],
+            None => {
+                rows.push(Row {
+                    rule: &f.rule_id,
+                    severity: f.severity,
+                    findings: 0,
+                    files: HashSet::new(),
+                });
+                rows.last_mut().unwrap()
+            }
+        };
+        row.findings += 1;
+        row.severity = row.severity.max(f.severity);
+        row.files.insert(f.file.as_path());
+    }
+    rows.sort_by(|a, b| b.findings.cmp(&a.findings).then(a.rule.cmp(b.rule)));
+
+    if !rows.is_empty() {
+        writeln!(
+            w,
+            "{}",
+            format!("{:>8}  {:>6}  {:<7}  rule", "findings", "files", "severity").dimmed()
+        )?;
+        for r in &rows {
+            writeln!(
+                w,
+                "{:>8}  {:>6}  {}  {}",
+                r.findings,
+                r.files.len(),
+                severity_badge(r.severity),
+                r.rule,
+            )?;
+        }
+    }
+    render_summary(findings, stats, w)
+}
+
 fn render_summary(findings: &[Finding], stats: &ScanStats, w: &mut impl Write) -> Result<()> {
     writeln!(w)?;
-    let suppressed = match stats.suppressed {
+    let mut suppressed = match stats.suppressed {
         0 => String::new(),
         n => format!(" {n} suppressed by tree-police: ignore comments."),
     };
+    if stats.baselined > 0 {
+        suppressed.push_str(&format!(" {} baselined.", stats.baselined));
+    }
     if findings.is_empty() {
         writeln!(
             w,
@@ -145,7 +223,21 @@ pub fn render_matches(
     w: &mut impl Write,
 ) -> Result<()> {
     match format {
-        Format::Pretty => render_matches_pretty(matches, stats, w),
+        Format::Pretty | Format::Summary => render_matches_pretty(matches, stats, w),
+        Format::Compact => {
+            for m in matches {
+                writeln!(
+                    w,
+                    "{}:{}:{}: @{} {}",
+                    m.file.display(),
+                    m.line,
+                    m.column,
+                    m.capture.bold(),
+                    m.text.lines().next().unwrap_or_default(),
+                )?;
+            }
+            Ok(())
+        }
         Format::Json => {
             serde_json::to_writer_pretty(&mut *w, matches)?;
             writeln!(w)?;
@@ -255,7 +347,7 @@ fn rule_catalog(ruleset: &Ruleset) -> Vec<RuleInfo> {
 /// Print the embedded rule catalog in the requested format.
 pub fn list_rules(format: Format, ruleset: &Ruleset, w: &mut impl Write) -> Result<()> {
     match format {
-        Format::Pretty => list_rules_pretty(ruleset, w),
+        Format::Pretty | Format::Compact | Format::Summary => list_rules_pretty(ruleset, w),
         Format::Json => {
             serde_json::to_writer_pretty(&mut *w, &rule_catalog(ruleset))?;
             writeln!(w)?;
@@ -383,6 +475,52 @@ mod tests {
         let text = String::from_utf8(buf).unwrap();
         assert!(text.contains("\"rule_id\": \"forbidden_print\""));
         assert!(text.contains("\"severity\": \"warning\""));
+    }
+
+    #[test]
+    fn compact_is_one_line_per_finding_plus_summary() {
+        let findings = vec![sample(), sample()];
+        let mut buf = Vec::new();
+        render(Format::Compact, &findings, &ScanStats::default(), &mut buf).unwrap();
+        let text = strip(&buf);
+        assert!(
+            text.starts_with("a.py:1:1: warning forbidden_print\n"),
+            "{text}"
+        );
+        assert!(text.contains("Summary: 0 error(s), 2 warning(s)"), "{text}");
+    }
+
+    #[test]
+    fn summary_counts_findings_and_files_per_rule() {
+        let mut other = sample();
+        other.file = PathBuf::from("b.py");
+        let mut eval = sample();
+        eval.rule_id = "eval_exec_usage".to_string();
+        eval.severity = Severity::Error;
+        let findings = vec![sample(), sample(), other, eval];
+        let mut buf = Vec::new();
+        render(Format::Summary, &findings, &ScanStats::default(), &mut buf).unwrap();
+        let text = strip(&buf);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines[1]
+                .split_whitespace()
+                .eq(["3", "2", "warning", "forbidden_print"]),
+            "{text}"
+        );
+        assert!(
+            lines[2]
+                .split_whitespace()
+                .eq(["1", "1", "error", "eval_exec_usage"]),
+            "{text}"
+        );
+    }
+
+    fn strip(buf: &[u8]) -> String {
+        let mut out = Vec::new();
+        let mut stream = anstream::StripStream::new(&mut out);
+        stream.write_all(buf).unwrap();
+        String::from_utf8(out).unwrap()
     }
 
     #[test]
