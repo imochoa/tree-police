@@ -102,6 +102,12 @@ with the built-in ruleset automatically — no fork, no image rebuild:
 Override the lookup path with `--rules-dir <dir>` if you'd rather keep it
 somewhere else.
 
+A repo-local rule with the same ID as a built-in one replaces it: the built-in
+version stops running, so you can tighten or loosen a built-in rule without
+getting every finding twice. [`examples/tree-police/`](examples/tree-police/)
+has a starter set (an org bucket prefix and a role-name suffix, which used to
+be built in) and an example config.
+
 ## Config file
 
 By default every rule runs on every file of its language. A
@@ -109,6 +115,12 @@ By default every rule runs on every file of its language. A
 rules run and overrides their severity per path:
 
 ```toml
+# Never scan these files at all (skipped before parsing).
+exclude = ["vendor/", "archive/**"]
+
+# Turn rules off everywhere.
+disable = ["nested_ternary", "category:web"]
+
 # Only run the temporal rules under src/workflows/.
 [[scope]]
 rules = ["category:temporal"]
@@ -126,7 +138,9 @@ paths    = ["legacy/**"]
 severity = "log"
 ```
 
-- `rules` takes rule IDs, `category:<name>`, or `file:<query-file-name>`
+- Top-level keys (`exclude`, `disable`) must come before any `[[scope]]` or
+  `[[override]]` table, as TOML requires.
+- `rules` and `disable` take rule IDs, `category:<name>`, or `file:<query-file-name>`
   (e.g. `file:no-foo-py.scm`). Unknown names are an error (exit 2), so a
   typo can't silently match nothing; see `--list-rules`.
 - **`[[scope]]`**: `paths` is an allowlist and `exclude` a denylist (at

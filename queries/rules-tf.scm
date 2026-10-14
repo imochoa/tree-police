@@ -14,21 +14,7 @@
 ; category: naming
 ; ============================================================
 
-; S3 Buckets -- illustrates enforcing an org-wide resource-naming prefix.
-; "acme-" is a placeholder; swap it (or add more rules like it) for your
-; own convention.
-
-(block
-  (identifier) @_block_type (#eq? @_block_type "resource")
-  (string_lit (template_literal) @_resource_type (#eq? @_resource_type "aws_s3_bucket"))
-  (body
-    (attribute
-      (identifier) @_attr (#eq? @_attr "bucket")
-      (expression (literal_value (string_lit
-        (template_literal) @_bucket_name (#not-match? @_bucket_name "^acme-"))))))
-  (#set! category "naming")
-  (#set! description "S3 bucket name must start with acme- (example org prefix)")
-) @s3_bucket_missing_prefix
+; S3 bucket names must be lowercase (AWS rejects uppercase).
 
 (block
   (identifier) @_block_type (#eq? @_block_type "resource")
@@ -41,20 +27,6 @@
   (#set! category "naming")
   (#set! description "S3 bucket name must be all lowercase")
 ) @s3_bucket_name_uppercase
-
-; IAM Roles -- illustrates enforcing a resource-type suffix convention.
-
-(block
-  (identifier) @_block_type (#eq? @_block_type "resource")
-  (string_lit (template_literal) @_resource_type (#eq? @_resource_type "aws_iam_role"))
-  (body
-    (attribute
-      (identifier) @_attr (#eq? @_attr "name")
-      (expression (literal_value (string_lit
-        (template_literal) @_role_name (#not-match? @_role_name "-role$"))))))
-  (#set! category "naming")
-  (#set! description "IAM role name must end with -role")
-) @iam_role_missing_role_suffix
 
 ; S3 bucket names with dots break virtual-hosted-style HTTPS (the wildcard
 ; certificate doesn't cover the extra labels) and S3 Transfer Acceleration.

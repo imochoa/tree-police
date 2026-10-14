@@ -96,7 +96,8 @@ pub fn scan(
         return Ok((Vec::new(), ScanStats::default()));
     }
 
-    let files = collect_files(paths, ruleset, opts);
+    let mut files = collect_files(paths, ruleset, opts);
+    files.retain(|path| !config.excludes(path));
     let catalog = Catalog::from_ruleset(ruleset);
 
     let per_file: Vec<(Vec<Finding>, usize)> = files

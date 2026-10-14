@@ -235,7 +235,7 @@ fn rule_catalog(ruleset: &Ruleset) -> Vec<RuleInfo> {
                 let Some(rule_id) = pattern.rule_id.clone() else {
                     continue;
                 };
-                if !seen.insert(rule_id.clone()) {
+                if pattern.replaced || !seen.insert(rule_id.clone()) {
                     continue;
                 }
                 rules.push(RuleInfo {
@@ -286,7 +286,7 @@ fn list_rules_pretty(ruleset: &Ruleset, w: &mut impl Write) -> Result<()> {
         let mut groups: Vec<(Option<&str>, Vec<&crate::rules::PatternMeta>)> = Vec::new();
         let mut seen = HashSet::new();
         for query in &lang.queries {
-            for pattern in query.patterns() {
+            for pattern in query.patterns().iter().filter(|p| !p.replaced) {
                 if let Some(rule_id) = pattern.rule_id.as_deref() {
                     if !seen.insert(rule_id) {
                         continue;
