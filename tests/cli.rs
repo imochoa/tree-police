@@ -52,8 +52,20 @@ fn json_output_carries_rule_and_severity() {
 
 #[test]
 fn terraform_naming_rule_fires() {
+    // The org-prefix rule is an opt-in example, not a built-in.
     tree_police()
         .args(["--fail-on", "none", TF_NAMING])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3_bucket_missing_prefix").not());
+    tree_police()
+        .args([
+            "--rules-dir",
+            "examples/tree-police",
+            "--fail-on",
+            "none",
+            TF_NAMING,
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("s3_bucket_missing_prefix"));
@@ -492,4 +504,202 @@ fn top_level_predicate_is_rejected_instead_of_ignored() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("bad-py.scm"));
+}
+
+#[test]
+fn repo_local_rule_replaces_builtin_with_the_same_id() {
+    // Same ID as the built-in forbidden_print, but only for print("x").
+    let repo = temp_repo(&[
+        (
+            ".tree-police/mine-py.scm",
+            "((call function: (identifier) @_f arguments: (argument_list (string) @_s)) @forbidden_print\n\
+             (#eq? @_f \"print\") (#eq? @_s \"\\\"x\\\"\")\n\
+             (#set! severity \"error\") (#set! description \"local version\"))\n",
+        ),
+        ("a.py", "print(\"x\")\nprint(\"y\")\n"),
+    ]);
+    let findings = findings_in(&repo, &[]);
+    // One finding (not two) on line 1, at the local rule's severity; line 2
+    // would only match the built-in, which is now off.
+    assert_eq!(
+        findings,
+        vec![("forbidden_print".to_string(), 1, "error".to_string())]
+    );
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--list-rules", "--format", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local version"))
+        .stdout(predicate::str::contains("Use the logger instead of print()").not());
+}
+
+#[test]
+fn config_disable_and_exclude() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "exclude = [\"vendor/\"]\ndisable = [\"category:security\"]\n",
+        ),
+        ("src/a.py", PRINT_AND_EVAL),
+        ("vendor/lib.py", PRINT_AND_EVAL),
+    ]);
+    let findings = findings_in(&repo, &[]);
+    assert_eq!(
+        findings,
+        vec![("forbidden_print".to_string(), 1, "warning".to_string())]
+    );
+    // Excluded files aren't scanned at all, even when passed explicitly.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--fail-on", "none", "src/a.py", "vendor/lib.py"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(scanned 1)"));
+}
+
+#[test]
+fn example_config_is_valid() {
+    tree_police()
+        .args([
+            "--rules-dir",
+            "examples/tree-police",
+            "--config",
+            "examples/tree-police/config.example.toml",
+            "--fail-on",
+            "none",
+            TF_NAMING,
+        ])
+        .assert()
+        .success();
+}
+
+// --- Output formats, baseline, fixture tests --------------------------------
+
+#[test]
+fn compact_and_summary_formats() {
+    tree_police()
+        .args(["--format", "compact", "--fail-on", "none", PY_VIOLATIONS])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::is_match(
+                r"(?m)^tests/fixtures/python/violations\.py:1:1: warning forbidden_print",
+            )
+            .unwrap(),
+        )
+        .stdout(predicate::str::contains("Summary:"));
+    tree_police()
+        .args(["--format", "summary", "--fail-on", "none", PY_VIOLATIONS])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"(?m)^\s+\d+\s+1\s+warning\s+forbidden_print").unwrap());
+}
+
+#[test]
+fn a_later_flag_overrides_an_earlier_one() {
+    // pre-commit appends `args` after the hook's own entry flags.
+    tree_police()
+        .args([
+            "--format",
+            "compact",
+            "--fail-on",
+            "error",
+            "--format",
+            "json",
+            "--fail-on",
+            "none",
+        ])
+        .arg(PY_SECURITY)
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("["));
+}
+
+#[test]
+fn baseline_hides_known_findings_and_reports_new_ones() {
+    let repo = temp_repo(&[("a.py", "print(1)\n"), ("b.py", "print(2)\n")]);
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--update-baseline", "."])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote 2 finding(s)"));
+    assert!(repo.path().join(".tree-police/baseline.json").is_file());
+
+    // Known finding moved down a line, plus a new one: only the new one shows.
+    std::fs::write(repo.path().join("a.py"), "x = 1\nprint(1)\nprint(3)\n").unwrap();
+    assert_eq!(
+        findings_in(&repo, &[]),
+        vec![("forbidden_print".to_string(), 3, "warning".to_string())]
+    );
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("2 baselined"));
+    assert_eq!(findings_in(&repo, &["--no-baseline"]).len(), 3);
+
+    // Scanning a single file by path still matches its baseline entry.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--fail-on", "none", "b.py"])
+        .assert()
+        .stdout(predicate::str::contains("No findings"));
+
+    // A partial update keeps the other files' entries.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--update-baseline", "a.py"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote 3 finding(s)"));
+}
+
+#[test]
+fn fixture_tests_pass_fail_and_stay_out_of_normal_scans() {
+    let rule = "((call function: (identifier) @_f) @no_foo (#eq? @_f \"foo\"))\n";
+    let repo = temp_repo(&[
+        (".tree-police/foo-py.scm", rule),
+        (
+            ".tree-police/tests/foo.py",
+            "foo()\n# <- @no_foo\nbar()\nprint(1)\n",
+        ),
+        ("src/a.py", "x = 1\n"),
+    ]);
+    // print() is a built-in rule nobody asserted, so it isn't a stray.
+    tree_police()
+        .current_dir(repo.path())
+        .arg("--test")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "1 fixture(s), 1 assertion(s), 0 failure(s)",
+        ));
+
+    // Fixtures violate rules on purpose; a normal scan never reports them,
+    // even when pre-commit passes them by name.
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--hidden", ".", ".tree-police/tests/foo.py"])
+        .assert()
+        .success();
+
+    std::fs::write(
+        repo.path().join(".tree-police/tests/foo.py"),
+        "foo()\nfoo()\n# <- @no_foo\nbar()\n# <- @no_foo\n",
+    )
+    .unwrap();
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--test", ".tree-police/tests"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "foo.py:1: unexpected @no_foo fired with no matching assertion",
+        ))
+        .stdout(predicate::str::contains(
+            "foo.py:5: expected @no_foo to fire on the line above",
+        ));
 }

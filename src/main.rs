@@ -1,14 +1,18 @@
 //! `tree-police` — scan source files for forbidden AST patterns using baked-in
 //! tree-sitter queries, each tagged with a severity (error / warning / log).
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
+use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 use tree_sitter::{Parser as TsParser, Query};
 
+use tree_police::baseline::Baseline;
+use tree_police::casetest;
 use tree_police::config::{Catalog, Config};
 use tree_police::registry;
 use tree_police::report::{self, Format};
@@ -32,6 +36,9 @@ enum FailOn {
 #[command(
     name = "tree-police",
     version,
+    // A later flag wins over an earlier one, so pre-commit `args` can
+    // override the hook entry's own `--format`/`--fail-on`.
+    args_override_self = true,
     about = "Ripgrep-style AST scanner with baked-in tree-sitter queries and severity levels.",
     long_about = "Scans .py / .tf (and other registered) files against tree-sitter queries \
 compiled into the binary. Each rule declares a severity (error / warning / log) via a \
@@ -116,6 +123,32 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
 
+    /// Baseline file of known findings to hide (see README "Baseline").
+    /// Defaults to `<rules-dir>/baseline.json` if that exists.
+    #[arg(long, value_name = "FILE", conflicts_with = "no_baseline")]
+    baseline: Option<PathBuf>,
+
+    /// Ignore any baseline file and report every finding.
+    #[arg(long)]
+    no_baseline: bool,
+
+    /// Write the current findings to the baseline file (default
+    /// `<rules-dir>/baseline.json`) instead of reporting them, and exit 0.
+    /// Entries for files this run didn't scan are kept.
+    #[arg(long, conflicts_with_all = ["no_baseline", "query", "query_file", "list_rules", "test"])]
+    update_baseline: bool,
+
+    /// Check annotated rule fixtures (`# <- @rule_id` under the line that
+    /// should match) in DIR, default `<rules-dir>/tests`, and exit 1 on any
+    /// failure. See README "Testing repo-local rules".
+    #[arg(
+        long,
+        value_name = "DIR",
+        num_args = 0..=1,
+        conflicts_with_all = ["query", "query_file", "list_rules", "show_tree"]
+    )]
+    test: Option<Option<PathBuf>>,
+
     /// Increase logging verbosity (-v = info, -vv = debug, -vvv = trace).
     #[arg(short, long, action = ArgAction::Count)]
     verbose: u8,
@@ -161,6 +194,7 @@ fn run(args: Args) -> Result<i32> {
         let opts = ScanOptions {
             respect_gitignore: !args.no_ignore,
             hidden: args.hidden,
+            skip_dirs: Vec::new(),
         };
         return run_ad_hoc_query(
             &source,
@@ -180,16 +214,47 @@ fn run(args: Args) -> Result<i32> {
         return Ok(0);
     }
 
+    if let Some(dir) = &args.test {
+        let dir = dir.clone().unwrap_or_else(|| args.rules_dir.join("tests"));
+        let opts = ScanOptions {
+            respect_gitignore: !args.no_ignore,
+            hidden: args.hidden,
+            skip_dirs: Vec::new(),
+        };
+        return run_fixture_tests(&dir, &ruleset, &opts, &mut out);
+    }
+
     let opts = ScanOptions {
         respect_gitignore: !args.no_ignore,
         hidden: args.hidden,
+        skip_dirs: vec![std::path::absolute(args.rules_dir.join("tests"))?],
     };
     let catalog = Catalog::from_ruleset(&ruleset);
     let config = match &args.config {
         Some(path) => Config::load_explicit(path, &catalog)?,
         None => Config::load_default(&args.rules_dir, &catalog)?,
     };
-    let (mut findings, stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
+    let (mut findings, mut stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
+
+    if args.update_baseline {
+        let (path, root) = baseline_location(&args)?;
+        let existing = if path.is_file() {
+            Baseline::load(path, root)?
+        } else {
+            Baseline::empty(path, root)
+        };
+        let shown = existing.path().display().to_string();
+        let total = existing.update(&stats.files, &findings)?;
+        writeln!(out, "Wrote {total} finding(s) to {shown}.")?;
+        out.flush().ok();
+        return Ok(0);
+    }
+    if !args.no_baseline {
+        let (path, root) = baseline_location(&args)?;
+        if args.baseline.is_some() || path.is_file() {
+            stats.baselined = Baseline::load(path, root)?.apply(&mut findings);
+        }
+    }
 
     if let Some(min) = args.min_severity {
         findings.retain(|f| f.severity >= min);
@@ -213,6 +278,85 @@ fn run(args: Args) -> Result<i32> {
         _ => 0,
     };
     Ok(exit_code)
+}
+
+/// The baseline file and the root its paths are relative to: an explicit
+/// `--baseline FILE` is relative to its own directory, the default
+/// `<rules-dir>/baseline.json` to the rules dir's parent (the repo root).
+fn baseline_location(args: &Args) -> Result<(PathBuf, PathBuf)> {
+    let (path, anchor) = match &args.baseline {
+        Some(path) => (path.clone(), std::path::absolute(path)?),
+        None => (
+            args.rules_dir.join("baseline.json"),
+            std::path::absolute(&args.rules_dir)?,
+        ),
+    };
+    let root = anchor.parent().unwrap_or(&anchor).to_path_buf();
+    Ok((path, root))
+}
+
+/// `--test`: run the full ruleset over annotated fixtures under `dir` and
+/// check the `<- @rule` assertions (see `tree_police::casetest`). Strays are
+/// checked for repo-local rules and for any rule a fixture asserts.
+fn run_fixture_tests(
+    dir: &Path,
+    ruleset: &rules::Ruleset,
+    opts: &ScanOptions,
+    out: &mut impl Write,
+) -> Result<i32> {
+    if !dir.is_dir() {
+        return Err(anyhow!(
+            "fixture directory {} does not exist",
+            dir.display()
+        ));
+    }
+    let (findings, stats) = scan::scan(&[dir.to_path_buf()], ruleset, &Config::default(), opts)?;
+    if stats.files.is_empty() {
+        return Err(anyhow!(
+            "no fixtures with a registered language extension under {}",
+            dir.display()
+        ));
+    }
+    let local: HashSet<&str> = ruleset
+        .languages()
+        .iter()
+        .flat_map(|l| l.queries.iter().filter(|q| !q.embedded))
+        .flat_map(|q| q.patterns().iter().filter_map(|p| p.rule_id.as_deref()))
+        .collect();
+
+    let mut assertion_count = 0;
+    let mut failure_count = 0;
+    for file in &stats.files {
+        let source = std::fs::read_to_string(file)
+            .with_context(|| format!("could not read {}", file.display()))?;
+        let assertions = casetest::parse_assertions(&source);
+        assertion_count += assertions.len();
+        let hits: Vec<casetest::Hit> = findings
+            .iter()
+            .filter(|f| &f.file == file)
+            .map(|f| casetest::Hit {
+                rule_id: f.rule_id.clone(),
+                start_row: f.line - 1,
+                end_row: f.end_line - 1,
+            })
+            .collect();
+        for (line, message) in casetest::check(&assertions, &hits, |r| local.contains(r)) {
+            failure_count += 1;
+            writeln!(out, "{}:{line}: {message}", file.display())?;
+        }
+    }
+
+    let summary = format!(
+        "{} fixture(s), {assertion_count} assertion(s), {failure_count} failure(s).",
+        stats.files.len()
+    );
+    if failure_count == 0 {
+        writeln!(out, "{}", summary.green())?;
+        Ok(0)
+    } else {
+        writeln!(out, "{}", summary.red().bold())?;
+        Ok(1)
+    }
 }
 
 fn show_tree(path: &Path) -> Result<()> {

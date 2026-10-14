@@ -65,12 +65,20 @@ pub struct ScanStats {
     pub files_with_findings: usize,
     /// Findings dropped by `tree-police: ignore…` comments.
     pub suppressed: usize,
+    /// Findings dropped because a baseline file already records them.
+    pub baselined: usize,
+    /// Every file that was scanned (after `exclude`), for baseline updates.
+    pub files: Vec<PathBuf>,
 }
 
 /// Filesystem-walk options.
 pub struct ScanOptions {
     pub respect_gitignore: bool,
     pub hidden: bool,
+    /// Directories never scanned, even when files inside them are passed
+    /// explicitly (the rules dir's `tests/` fixtures, which violate rules on
+    /// purpose).
+    pub skip_dirs: Vec<PathBuf>,
 }
 
 impl Default for ScanOptions {
@@ -78,7 +86,20 @@ impl Default for ScanOptions {
         Self {
             respect_gitignore: true,
             hidden: false,
+            skip_dirs: Vec::new(),
         }
+    }
+}
+
+impl ScanOptions {
+    fn skips(&self, path: &Path) -> bool {
+        if self.skip_dirs.is_empty() {
+            return false;
+        }
+        let Ok(abs) = std::path::absolute(path) else {
+            return false;
+        };
+        self.skip_dirs.iter().any(|dir| abs.starts_with(dir))
     }
 }
 
@@ -96,7 +117,8 @@ pub fn scan(
         return Ok((Vec::new(), ScanStats::default()));
     }
 
-    let files = collect_files(paths, ruleset, opts);
+    let mut files = collect_files(paths, ruleset, opts);
+    files.retain(|path| !config.excludes(path) && !opts.skips(path));
     let catalog = Catalog::from_ruleset(ruleset);
 
     let per_file: Vec<(Vec<Finding>, usize)> = files
@@ -129,6 +151,8 @@ pub fn scan(
         files_scanned: files.len(),
         files_with_findings,
         suppressed,
+        baselined: 0,
+        files,
     };
     Ok((findings, stats))
 }
@@ -292,7 +316,7 @@ pub fn run_query(
     let stats = ScanStats {
         files_scanned: files.len(),
         files_with_findings,
-        suppressed: 0,
+        ..ScanStats::default()
     };
     Ok((matches, stats))
 }

@@ -60,7 +60,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── python/pyproject.toml      # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
 ├── .pre-commit-hooks.yaml     # `tree-police` (python, PyPI wheel) + `tree-police-docker` hooks
 ├── .github/workflows/         # image (ghcr.io), CLI tarballs (GitHub Release), wheels (PyPI)
-├── src/                       # main, registry, rules, scan, report, severity, config, suppress
+├── src/                       # main, registry, rules, scan, report, severity, config, suppress, baseline, casetest
 ├── tests/cli.rs               # black-box CLI tests
 ├── tests/query_cases.rs       # per-rule annotated fixture tests (see below)
 ├── .envrc                     # direnv: `use flake`
@@ -68,6 +68,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── queries/                   # flat: <label>-<code>.scm, see queries/README.md
 │   ├── rules-py.scm           # categories: forbidden, security, temporal, web, occt
 │   └── rules-tf.scm           # categories: naming, conventions, security
+├── examples/tree-police/      # opt-in example repo-local rules + config.example.toml
 ├── tests/fixtures/            # whole-file good/bad samples for tests/cli.rs
 │   ├── python/
 │   └── terraform/
@@ -117,6 +118,11 @@ rule's positive example directly above its negative counterexample (not in
 a separate "clean" section at the bottom); see any file under
 `tests/query-cases/python/` for the pattern.
 
+The assertion parsing and checking live in `src/casetest.rs`, shared with
+`tree-police --test`, which runs the same check over a repo's own
+`.tree-police/tests/` fixtures (any line-comment syntax, full ruleset, strays
+checked for repo-local rules only).
+
 It runs the **compiled `tree-police` matcher** directly (via
 `tree_police::rules::load()`), not a subprocess. It caught a real bug when
 this engine's rule files were consolidated to one per language: because
@@ -140,7 +146,8 @@ a future rule file needs no Cargo/registry change.
 ## Path scoping and suppressions
 
 `src/config.rs` loads `.tree-police/config.toml` (or `--config FILE`). In it,
-`[[scope]]` entries restrict the selected rules to `paths` and/or keep them
+top-level `exclude` globs drop files before parsing (`scan::scan`), top-level
+`disable` selectors drop findings everywhere, `[[scope]]` entries restrict the selected rules to `paths` and/or keep them
 out of `exclude`, and `[[override]]` entries change severity per path.
 `src/suppress.rs` reads `tree-police: ignore` / `ignore-next-line` /
 `ignore-file` directives from comment nodes. Both run per file inside
@@ -172,7 +179,8 @@ comment that refers to it, which is one more reason to keep them stable.
 - Prefer declarative predicates (`#eq?`, `#match?`, `#not-match?`) over broad structural matches.
 - Capture names are the rule ID surfaced to users — make them descriptive (`hardcoded_provider_credentials`, not `bad1`).
 - Keep one logical rule per capture name; combine predicates rather than duplicating patterns.
-- Terraform rules are illustrative examples of naming/convention/security checks (e.g. a placeholder `acme-` bucket prefix, `-role`/`-sg` suffixes) — swap them for your own org's conventions rather than assuming they apply as-is.
+- Built-in rules must hold for any codebase. Org-specific conventions (a bucket prefix, a role-name suffix) go in `examples/tree-police/` as copyable repo-local rules, not in `queries/`: a placeholder like `acme-` fires on every real resource.
+- A repo-local rule with the same ID as a built-in one replaces it (`rules::replace_overridden_builtins` disables the built-in patterns). That's the supported way to retune a built-in rule.
 
 ## Credits
 

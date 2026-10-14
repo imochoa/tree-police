@@ -1,7 +1,13 @@
 //! Path-scoped rule configuration (`.tree-police/config.toml`).
 //!
 //! Every rule runs on every file of its language unless a config says
-//! otherwise. Two kinds of entries, both keyed by rule [`Selector`]s:
+//! otherwise. Two top-level keys apply everywhere:
+//!
+//! - `exclude` lists globs of files that are never scanned at all (vendored or
+//!   archived code); they're skipped before parsing.
+//! - `disable` lists rule [`Selector`]s that never report anything.
+//!
+//! Then two kinds of entries, both keyed by rule selectors:
 //!
 //! - `[[scope]]` restricts *where* the selected rules run: `paths` (if set)
 //!   is an allowlist, `exclude` a denylist. A finding survives only if every
@@ -137,6 +143,10 @@ impl Catalog {
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(default)]
+    disable: Vec<String>,
+    #[serde(default)]
     scope: Vec<RawEntry>,
     #[serde(default, rename = "override")]
     overrides: Vec<RawEntry>,
@@ -184,6 +194,8 @@ impl Entry {
 #[derive(Debug, Default)]
 pub struct Config {
     root: PathBuf,
+    exclude: Option<GlobSet>,
+    disabled: Vec<Selector>,
     scopes: Vec<Entry>,
     overrides: Vec<(Entry, Severity)>,
 }
@@ -220,6 +232,8 @@ impl Config {
         let raw: RawConfig = toml::from_str(text)?;
         let mut config = Config {
             root,
+            exclude: glob_set(&raw.exclude).context("`exclude`")?,
+            disabled: parse_selectors(&raw.disable, catalog).context("`disable`")?,
             ..Config::default()
         };
         for (i, raw) in raw.scope.into_iter().enumerate() {
@@ -250,8 +264,19 @@ impl Config {
         Ok(config)
     }
 
-    /// Apply scopes and overrides to one file's findings in place.
+    /// Whether the top-level `exclude` globs cover `path`. Files outside the
+    /// config root are never excluded.
+    pub fn excludes(&self, path: &Path) -> bool {
+        self.exclude
+            .as_ref()
+            .is_some_and(|set| self.relative(path).is_some_and(|rel| set.is_match(rel)))
+    }
+
+    /// Apply `disable`, scopes and overrides to one file's findings in place.
     pub fn apply(&self, path: &Path, findings: &mut Vec<Finding>) {
+        if !self.disabled.is_empty() {
+            findings.retain(|f| !self.disabled.iter().any(|sel| sel.matches(f)));
+        }
         if self.scopes.is_empty() && self.overrides.is_empty() {
             return;
         }
@@ -284,20 +309,21 @@ fn build_entry(raw: RawEntry, catalog: &Catalog) -> Result<Entry> {
     if raw.rules.is_empty() {
         bail!("`rules` must not be empty");
     }
-    let selectors = raw
-        .rules
-        .iter()
+    Ok(Entry {
+        selectors: parse_selectors(&raw.rules, catalog)?,
+        paths: glob_set(&raw.paths)?,
+        exclude: glob_set(&raw.exclude)?,
+    })
+}
+
+fn parse_selectors(raw: &[String], catalog: &Catalog) -> Result<Vec<Selector>> {
+    raw.iter()
         .map(|s| {
             let sel = Selector::parse(s)?;
             catalog.check(&sel)?;
             Ok(sel)
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(Entry {
-        selectors,
-        paths: glob_set(&raw.paths)?,
-        exclude: glob_set(&raw.exclude)?,
-    })
+        .collect()
 }
 
 fn glob_set(patterns: &[String]) -> Result<Option<GlobSet>> {
@@ -407,6 +433,31 @@ mod tests {
     }
 
     #[test]
+    fn disable_drops_selected_rules_everywhere() {
+        let c = config(
+            r#"
+            disable = ["forbidden_print", "category:security"]
+            "#,
+        );
+        assert!(surviving(&c, "/repo/a.py", finding("x", "forbidden_print", None)).is_none());
+        let eval = finding("x", "eval_exec_usage", Some("security"));
+        assert!(surviving(&c, "/repo/a.py", eval).is_none());
+        let todo = finding("x", "todo", Some("forbidden"));
+        assert!(surviving(&c, "/elsewhere/a.py", todo).is_some());
+    }
+
+    #[test]
+    fn top_level_exclude_matches_root_relative_paths() {
+        let c = config(r#"exclude = ["vendor/", "archive/**", "*.gen.py"]"#);
+        assert!(c.excludes(Path::new("/repo/vendor/lib/a.py")));
+        assert!(c.excludes(Path::new("/repo/archive/old/main.tf")));
+        assert!(c.excludes(Path::new("/repo/models.gen.py")));
+        assert!(!c.excludes(Path::new("/repo/src/a.py")));
+        assert!(!c.excludes(Path::new("/elsewhere/vendor/a.py")));
+        assert!(!Config::default().excludes(Path::new("/repo/vendor/a.py")));
+    }
+
+    #[test]
     fn rejects_unknown_selectors_and_misplaced_keys() {
         let cat = catalog();
         let root = || PathBuf::from("/repo");
@@ -418,6 +469,8 @@ mod tests {
             "[[override]]\nrules = [\"forbidden_print\"]",
             "[[override]]\nrules = [\"forbidden_print\"]\nseverity = \"loud\"",
             "[[scop]]\nrules = [\"forbidden_print\"]",
+            "disable = [\"no_such_rule\"]",
+            "exclude = [\"[\"]",
         ] {
             assert!(Config::parse(bad, root(), &cat).is_err(), "accepted: {bad}");
         }

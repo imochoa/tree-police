@@ -61,14 +61,20 @@ jobs:
       # The `tree-police` hook (.pre-commit-hooks.yaml) installs the root
       # pyproject.toml stub, which pins this version on PyPI. Point pip at the
       # wheel just built instead, so the hook is tested before publishing.
+      # PIP_NO_INDEX is load-bearing: until a release bumps the version, PyPI
+      # has a wheel with the same version and platform tag, and pip may pick
+      # that one, testing this commit's hook args against the old binary.
+      # The stub's build backend (hatchling) is pre-downloaded for the same
+      # reason, outside dist/ so it isn't uploaded with the wheels.
       - name: Pre-commit hook smoke test
         if: matrix.target == 'x86_64' && matrix.manylinux == '2_28'
-        env:
-          PIP_FIND_LINKS: ${{ github.workspace }}/dist
         run: |
           .venv/bin/pip install pre-commit
-          .venv/bin/pre-commit try-repo . tree-police \
-            --files tests/fixtures/python/clean.py tests/fixtures/terraform/clean.tf
+          .venv/bin/pip download --dest hook-build-deps hatchling
+          PIP_NO_INDEX=1 \
+          PIP_FIND_LINKS="${{ github.workspace }}/dist ${{ github.workspace }}/hook-build-deps" \
+            .venv/bin/pre-commit try-repo . tree-police \
+              --files tests/fixtures/python/clean.py tests/fixtures/terraform/clean.tf
 
       - uses: actions/upload-artifact@v4
         with:

@@ -15,70 +15,30 @@
 use std::fs;
 
 use streaming_iterator::StreamingIterator;
+use tree_police::casetest::{self, Hit};
 use tree_police::registry;
 use tree_police::rules;
 use tree_sitter::{Parser, QueryCursor};
-
-/// A `# <- @name` assertion: the capture expected on the line above it.
-struct Assertion {
-    /// 0-indexed row of the line being asserted about (the comment's row - 1).
-    target_row: usize,
-    expected: String,
-    /// 1-indexed line of the assertion comment itself, for error messages.
-    comment_line: usize,
-}
-
-fn parse_assertions(source: &str) -> Vec<Assertion> {
-    let mut out = Vec::new();
-    for (row, line) in source.lines().enumerate() {
-        let Some(name) = line.trim().strip_prefix("# <- @") else {
-            continue;
-        };
-        if row == 0 || name.is_empty() {
-            continue;
-        }
-        out.push(Assertion {
-            target_row: row - 1,
-            expected: name.trim().to_string(),
-            comment_line: row + 1,
-        });
-    }
-    out
-}
-
-/// A reported (non-helper) capture from running the query over the fixture.
-struct ActualCapture {
-    name: String,
-    start_row: usize,
-    end_row: usize,
-}
 
 /// Run `queries/<query_stem>-<code>.scm` (where `<code>` is `lang`'s
 /// registry code) against `tests/query-cases/<lang>/<fixture_stem>.<ext>` and
 /// check every assertion fires, and nothing else does. `query_stem` and
 /// `fixture_stem` are separate because a language's rules live in one file
 /// (`rules-<code>.scm`) while its fixtures stay split by topic for
-/// readability.
+/// readability. The assertion syntax and checking live in
+/// `tree_police::casetest`, shared with `tree-police --test`.
 fn run_query_cases(lang: &str, query_stem: &str, fixture_stem: &str, ext: &str) {
     let fixture_path = format!("tests/query-cases/{lang}/{fixture_stem}.{ext}");
     let source = fs::read_to_string(&fixture_path)
         .unwrap_or_else(|err| panic!("reading {fixture_path}: {err}"));
 
-    let assertions = parse_assertions(&source);
+    let assertions = casetest::parse_assertions(&source);
     assert!(
         !assertions.is_empty(),
         "{fixture_path} has no `# <- @name` assertions -- nothing to check"
     );
-    // Assertion comments are themselves source lines, so a rule that matches
-    // on comment *content* (e.g. `todo`, scanning for the literal word
-    // "todo") can legitimately fire on the `# <- @todo` line right below the
-    // one it's annotating. Exclude assertion-comment rows from the stray
-    // check below -- they're test metadata, not fixture content.
-    let assertion_rows: std::collections::HashSet<usize> =
-        assertions.iter().map(|a| a.comment_line - 1).collect();
 
     let spec = registry::by_name(lang).expect("language is registered");
-
     let ruleset = rules::load().expect("embedded queries should compile");
     let lang_rules = ruleset
         .language(lang)
@@ -99,48 +59,22 @@ fn run_query_cases(lang: &str, query_stem: &str, fixture_stem: &str, ext: &str) 
 
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&cq.query, tree.root_node(), source.as_bytes());
-    let mut actual = Vec::new();
+    let mut hits = Vec::new();
     while let Some(m) = matches.next() {
         if let Some(capture) = m.captures.iter().find(|c| !cq.is_helper(c.index)) {
             let node = capture.node;
-            actual.push(ActualCapture {
-                name: cq.capture_name(capture.index).to_string(),
+            hits.push(Hit {
+                rule_id: cq.capture_name(capture.index).to_string(),
                 start_row: node.start_position().row,
                 end_row: node.end_position().row,
             });
         }
     }
 
-    let mut failures = Vec::new();
-
-    for a in &assertions {
-        let hit = actual
-            .iter()
-            .any(|c| c.name == a.expected && (c.start_row..=c.end_row).contains(&a.target_row));
-        if !hit {
-            failures.push(format!(
-                "{fixture_path}:{}: expected @{} to fire on the line above, but it did not",
-                a.comment_line, a.expected
-            ));
-        }
-    }
-
-    for c in &actual {
-        if (c.start_row..=c.end_row).any(|row| assertion_rows.contains(&row)) {
-            continue;
-        }
-        let covered = assertions
-            .iter()
-            .any(|a| a.expected == c.name && (c.start_row..=c.end_row).contains(&a.target_row));
-        if !covered {
-            failures.push(format!(
-                "{fixture_path}:{}: unexpected @{} fired with no matching assertion",
-                c.start_row + 1,
-                c.name
-            ));
-        }
-    }
-
+    let failures: Vec<String> = casetest::check(&assertions, &hits, |_| true)
+        .into_iter()
+        .map(|(line, message)| format!("{fixture_path}:{line}: {message}"))
+        .collect();
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
