@@ -243,9 +243,11 @@ rule sets are a small illustrative starting point, not an exhaustive policy —
 extend them or add your own via a repo-local `.tree-police/` directory (see
 above).
 
-The binary also bakes in grammars for **92 languages total** with no rules
+The binary also bakes in grammars for **93 languages total** with no rules
 yet beyond those two — every tree-sitter grammar crate on crates.io whose
-`tree-sitter` core dependency is compatible with this crate's pinned version
+`tree-sitter` core dependency is compatible with this crate's pinned version,
+plus a vendored grammar for [Talon](https://talonvoice.com) `.talon` files
+(from [wenkokke/tree-sitter-talon](https://github.com/wenkokke/tree-sitter-talon))
 (a handful of popular languages are excluded because their published crate's
 `tree-sitter` pin can't coexist with ours in one binary, or because the
 published crate itself is broken — see the comment above

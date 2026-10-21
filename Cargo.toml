@@ -116,6 +116,9 @@ tree-sitter-vhdl = "1.4.0"
 tree-sitter-wesl = "0.1.0"
 tree-sitter-xml = "0.7.0"
 tree-sitter-zig = "1.1.2"
+# Not on crates.io and upstream pins an incompatible tree-sitter core; see
+# vendor/tree-sitter-talon/Cargo.toml.
+tree-sitter-talon = { path = "vendor/tree-sitter-talon" }
 toml = "1.1.8"
 globset = "0.4.20"
 

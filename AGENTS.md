@@ -13,9 +13,11 @@ once, in parallel (`ignore` + `rayon`), with severity levels and
 pretty/JSON/JSONL output.
 
 Rules currently cover Python and Terraform/HCL. `src/registry.rs` also bakes
-in 90 other grammars (92 languages total) with no rule files yet — every
+in 91 other grammars (93 languages total) with no rule files yet — every
 tree-sitter grammar crate on crates.io compatible with this crate's pinned
-`tree-sitter` core version (see the comment above `registry::LANGUAGES` for
+`tree-sitter` core version, plus Talon (`.talon`), vendored as a path crate
+under `vendor/tree-sitter-talon/` because it isn't on crates.io and upstream
+pins an incompatible core (see the comment above `registry::LANGUAGES` for
 what's excluded and why). A new rule file is all that's needed to start
 covering one of them, no Cargo/registry change required, and a pre-commit
 hook can pass every changed file without its own file-type allowlist
@@ -162,7 +164,7 @@ comment that refers to it, which is one more reason to keep them stable.
 
 ## Gotchas
 
-- **The root `pyproject.toml` is not the real package.** pre-commit/prek install a `language: python` hook with `pip install .` on the repo root, so the root holds a stub that only depends on `tree-police==<version>` from PyPI. That way hook users get the prebuilt wheel instead of compiling 92 grammars. The maturin config lives in `python/pyproject.toml` (README and licenses are symlinked in). `just release` bumps the stub's pin, and `tests/packaging.rs` fails if it drifts from `Cargo.toml`. A new tag's hook can only be installed once `pypi-release.yml` has published that version.
+- **The root `pyproject.toml` is not the real package.** pre-commit/prek install a `language: python` hook with `pip install .` on the repo root, so the root holds a stub that only depends on `tree-police==<version>` from PyPI. That way hook users get the prebuilt wheel instead of compiling 93 grammars. The maturin config lives in `python/pyproject.toml` (README and licenses are symlinked in). `just release` bumps the stub's pin, and `tests/packaging.rs` fails if it drifts from `Cargo.toml`. A new tag's hook can only be installed once `pypi-release.yml` has published that version.
 
 - **No regex lookaheads.** Rust's `regex` crate rejects `(?!...)` / `(?=...)`. Split into separate `#not-match?` / `#match?` predicates on the same capture instead.
 - **A predicate can't reference the capture on its own enclosing node.** A node's capture is only declared at its closing paren, so a predicate that's one of that node's *own children* comes before the capture exists, textually — `(node (child) (#pred? @x) ) @x` fails to compile ("Invalid capture name"). Wrap the captured node and the predicate together in one more pair of parens instead — `((node (child)) @x (#pred? @x ...))` — so they become siblings at the outer level, where ordering works. See `missing_route_validation` in `queries/rules-py.scm` (and `bare_except`/`todo`, which use the same wrapping).

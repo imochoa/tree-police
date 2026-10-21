@@ -929,6 +929,7 @@ dependencies = [
  "tree-sitter-sparql",
  "tree-sitter-swift",
  "tree-sitter-t32",
+ "tree-sitter-talon",
  "tree-sitter-templ",
  "tree-sitter-tera",
  "tree-sitter-tlaplus",
@@ -1758,6 +1759,14 @@ name = "tree-sitter-t32"
 version = "9.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8374561b8d220b645da73e731b6d391077c9162618938e0702762d2f91a40479"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-talon"
+version = "0.0.1"
 dependencies = [
  "cc",
  "tree-sitter-language",
