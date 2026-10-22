@@ -1,0 +1,28 @@
+# Vendored tree-sitter grammar for Talon (https://talonvoice.com) `.talon` files.
+#
+# Upstream: https://github.com/wenkokke/tree-sitter-talon, commit
+# 292515921c4bc50cd3dd2df833d2fd773265994c (branch `dev`). Not published on
+# crates.io, and upstream's own Cargo.toml pins `tree-sitter = "~0.20"`, which
+# can't link alongside this crate's `0.25` (one native `tree-sitter` per
+# binary). The generated `parser.c` is ABI 14, which `0.25` loads fine, so only
+# the C sources are vendored and exposed via `tree-sitter-language`.
+# To update: re-download `src/parser.c`, `src/scanner.c` and `src/tree_sitter/*`
+# from upstream and bump the commit above.
+[package]
+name = "tree-sitter-talon"
+version = "0.0.1"
+edition = "2021"
+description = "Vendored Talon grammar for tree-sitter (from wenkokke/tree-sitter-talon)"
+license = "MIT"
+repository = "https://github.com/wenkokke/tree-sitter-talon"
+publish = false
+build = "build.rs"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1"

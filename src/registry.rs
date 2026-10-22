@@ -393,6 +393,10 @@ fn css_language() -> Language {
     tree_sitter_css::LANGUAGE.into()
 }
 
+fn talon_language() -> Language {
+    tree_sitter_talon::LANGUAGE.into()
+}
+
 /// Every language the binary knows about, in a stable order. Covers every
 /// tree-sitter grammar crate on crates.io whose runtime dependency on
 /// `tree-sitter`/`tree-sitter-language` resolves against this crate's pinned
@@ -411,6 +415,9 @@ fn css_language() -> Language {
 /// crate omits/disables the external scanner source their own parser needs,
 /// failing at link time regardless of version. Re-check both categories
 /// periodically -- newer releases may fix either problem.
+///
+/// One addition from outside crates.io: `talon`, vendored as a path crate
+/// (`vendor/tree-sitter-talon/`, see its `Cargo.toml` for why and how to update).
 pub static LANGUAGES: &[LangSpec] = &[
     LangSpec {
         name: "python",
@@ -972,6 +979,12 @@ pub static LANGUAGES: &[LangSpec] = &[
         extensions: &["css"],
         language_fn: css_language,
     },
+    LangSpec {
+        name: "talon",
+        code: "talon",
+        extensions: &["talon"],
+        language_fn: talon_language,
+    },
 ];
 
 /// Look up a language by its human-readable name.
@@ -1002,6 +1015,6 @@ mod tests {
         for spec in LANGUAGES {
             let _ = spec.language();
         }
-        assert_eq!(LANGUAGES.len(), 92);
+        assert_eq!(LANGUAGES.len(), 93);
     }
 }
