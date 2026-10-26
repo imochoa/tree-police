@@ -1,0 +1,90 @@
+name: Verify
+
+# Tests, the Lean model's proofs, Rust-vs-Lean differential testing, and a
+# short fuzzing run on every PR; a longer fuzzing run nightly. See
+# docs/formal-methods.md.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: Seconds per fuzz target
+        default: "600"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+        env:
+          PROPTEST_CASES: "5000"
+
+  lean:
+    # Proofs are checked by `lake build`: a failing proof is a build error.
+    # `sorry` only warns, so it gets its own check.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: formal
+          auto-config: false
+          build: true
+      - name: No sorry
+        run: "! grep -rnw --include='*.lean' sorry formal --exclude-dir=.lake"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Differential test (Rust vs Lean model)
+        run: cargo test --test lean_oracle
+        env:
+          TREE_POLICE_LEAN_ORACLE: ${{ github.workspace }}/formal/.lake/build/bin/oracle
+          PROPTEST_CASES: "50000"
+
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_directive, selector_roundtrip, suppress_python]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # The corpus libFuzzer grows is kept between runs, so each run starts
+      # from everything earlier runs found instead of from scratch.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fuzz
+        working-directory: fuzz
+        run: >
+          cargo fuzz run -s none ${{ matrix.target }} --
+          -max_total_time=${{ github.event_name == 'schedule' && '900' || inputs.fuzz_seconds || '60' }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
