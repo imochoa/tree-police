@@ -6,7 +6,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use clap::{ArgAction, Parser};
+use clap::builder::PossibleValuesParser;
+use clap::{ArgAction, CommandFactory, Parser, ValueHint};
+use clap_complete::Shell;
 use owo_colors::OwoColorize;
 use regex::bytes::Regex;
 use tracing_subscriber::EnvFilter;
@@ -53,7 +55,7 @@ above --fail-on; 1 = findings at or above the threshold; 2 = an internal error."
 )]
 struct Args {
     /// Files or directories to scan.
-    #[arg(default_value = ".")]
+    #[arg(default_value = ".", value_hint = ValueHint::AnyPath)]
     paths: Vec<PathBuf>,
 
     /// Output format.
@@ -92,7 +94,12 @@ struct Args {
     /// Print an indented AST for FILE and exit (language inferred from its
     /// extension, same registry as scanning). Useful for discovering node
     /// names while writing a query -- see docs/writing-queries.md.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["query", "query_file", "list_rules"])]
+    #[arg(
+        long,
+        value_name = "FILE",
+        value_hint = ValueHint::FilePath,
+        conflicts_with_all = ["query", "query_file", "list_rules"]
+    )]
     show_tree: Option<PathBuf>,
 
     /// Ad-hoc query string to run against `paths` instead of the embedded
@@ -102,7 +109,11 @@ struct Args {
     query: Option<String>,
 
     /// Same as --query, read from a file instead of the command line.
-    #[arg(long, conflicts_with_all = ["query", "show_tree", "list_rules"])]
+    #[arg(
+        long,
+        value_hint = ValueHint::FilePath,
+        conflicts_with_all = ["query", "show_tree", "list_rules"]
+    )]
     query_file: Option<PathBuf>,
 
     /// Plain regex to search for, line by line like ripgrep, instead of
@@ -135,7 +146,11 @@ struct Args {
     /// Language for --query/--query-file. Inferred automatically when
     /// `paths` resolve to files of exactly one registered language;
     /// required if that's ambiguous (e.g. a mixed-language directory).
-    #[arg(long)]
+    #[arg(
+        long,
+        value_parser = PossibleValuesParser::new(registry::LANGUAGES.iter().map(|l| l.name)),
+        hide_possible_values = true
+    )]
     lang: Option<String>,
 
     /// Do not respect .gitignore / .ignore files.
@@ -152,7 +167,7 @@ struct Args {
 
     /// Directory of repo-local `<label>-<code>.scm` rule files, merged with
     /// the embedded ruleset. Not an error if it doesn't exist.
-    #[arg(long, default_value = ".tree-police")]
+    #[arg(long, default_value = ".tree-police", value_hint = ValueHint::DirPath)]
     rules_dir: PathBuf,
 
     /// Config file scoping rules to paths and overriding severities (see
@@ -160,12 +175,17 @@ struct Args {
     /// exists; globs there are relative to the rules dir's parent (the repo
     /// root for `.tree-police/`), and to this file's own directory when it
     /// is passed explicitly.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
     config: Option<PathBuf>,
 
     /// Baseline file of known findings to hide (see README "Baseline").
     /// Defaults to `<rules-dir>/baseline.json` if that exists.
-    #[arg(long, value_name = "FILE", conflicts_with = "no_baseline")]
+    #[arg(
+        long,
+        value_name = "FILE",
+        value_hint = ValueHint::FilePath,
+        conflicts_with = "no_baseline"
+    )]
     baseline: Option<PathBuf>,
 
     /// Ignore any baseline file and report every finding.
@@ -184,10 +204,17 @@ struct Args {
     #[arg(
         long,
         value_name = "DIR",
+        value_hint = ValueHint::DirPath,
         num_args = 0..=1,
         conflicts_with_all = ["query", "query_file", "list_rules", "show_tree"]
     )]
     test: Option<Option<PathBuf>>,
+
+    /// Print a shell completion script for SHELL and exit, e.g. for zsh:
+    /// `tree-police --completions zsh > "${fpath[1]}/_tree-police"`. See
+    /// README "Shell completions".
+    #[arg(long, value_name = "SHELL", exclusive = true)]
+    completions: Option<Shell>,
 
     /// Increase logging verbosity (-v = info, -vv = debug, -vvv = trace).
     #[arg(short, long, action = ArgAction::Count)]
@@ -220,6 +247,13 @@ fn run(args: Args) -> Result<i32> {
     if args.skill {
         let mut out = std::io::stdout();
         out.write_all(SKILL.as_bytes())?;
+        out.flush().ok();
+        return Ok(0);
+    }
+
+    if let Some(shell) = args.completions {
+        let mut out = std::io::stdout();
+        clap_complete::generate(shell, &mut Args::command(), "tree-police", &mut out);
         out.flush().ok();
         return Ok(0);
     }

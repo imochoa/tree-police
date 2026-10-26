@@ -7,7 +7,7 @@ them, so their license terms travel with it.
 
 ## Overview
 
-- MIT License (170 crate(s))
+- MIT License (171 crate(s))
 - Apache License 2.0 (5 crate(s))
 - BSD 2-Clause "Simplified" License (1 crate(s))
 - Unicode License v3 (1 crate(s))
@@ -1269,6 +1269,7 @@ Used by:
 - [anstyle 1.0.14](https://github.com/rust-cli/anstyle.git)
 - [clap 4.6.6](https://github.com/clap-rs/clap)
 - [clap_builder 4.6.6](https://github.com/clap-rs/clap)
+- [clap_complete 4.6.11](https://github.com/clap-rs/clap)
 - [clap_derive 4.6.4](https://github.com/clap-rs/clap)
 - [clap_lex 1.1.0](https://github.com/clap-rs/clap)
 - [colorchoice 1.0.5](https://github.com/rust-cli/anstyle.git)
