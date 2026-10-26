@@ -703,3 +703,162 @@ fn fixture_tests_pass_fail_and_stay_out_of_normal_scans() {
             "foo.py:5: expected @no_foo to fire on the line above",
         ));
 }
+
+// --- --grep and --git-history ---------------------------------------------
+
+#[test]
+fn grep_searches_any_text_file_without_a_grammar() {
+    let repo = temp_repo(&[
+        ("notes.txt", "nothing\nthe api_key lives here\n"),
+        ("a.py", "API_KEY = 1\n"),
+        ("blob.bin", "api_key\0binary"),
+    ]);
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--grep", "(?i)api_key", "--format", "compact"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("notes.txt:2:5: @grep api_key"))
+        .stdout(predicate::str::contains("a.py:1:1: @grep API_KEY"))
+        .stdout(predicate::str::contains("blob.bin").not());
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .current_dir(dir)
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .status()
+        .expect("git should run");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// A repo whose violations only exist in history: commit 1 adds them, commit
+/// 2 removes them, and an unmerged `side` branch adds one more.
+fn history_repo() -> tempfile::TempDir {
+    let repo = temp_repo(&[
+        ("app.py", "print(\"debug\")\nx = 1\n"),
+        ("unchanged.py", "y = 2\n"),
+        ("notes.txt", "token: hunter2\n"),
+    ]);
+    let dir = repo.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "one"]);
+    std::fs::write(dir.join("app.py"), "x = 1\n").unwrap();
+    std::fs::remove_file(dir.join("notes.txt")).unwrap();
+    git(dir, &["commit", "-q", "-am", "two"]);
+    git(dir, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(dir.join("side.txt"), "hunter2 again\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "side"]);
+    git(dir, &["checkout", "-q", "main"]);
+    repo
+}
+
+#[test]
+fn git_history_grep_finds_deleted_content_on_every_ref() {
+    let repo = history_repo();
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--grep", "hunter2", "--format", "compact"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let output = tree_police()
+        .current_dir(repo.path())
+        .args(["--git-history", "--grep", "hunter2", "--format", "compact"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    // Oldest commit first, as `<commit>:<path>`.
+    assert!(
+        lines[0].ends_with(":notes.txt:1:8: @grep hunter2"),
+        "{text}"
+    );
+    assert!(lines[1].ends_with(":side.txt:1:1: @grep hunter2"), "{text}");
+}
+
+#[test]
+fn git_history_revs_limit_which_refs_are_searched() {
+    let repo = history_repo();
+    tree_police()
+        .current_dir(repo.path())
+        .args([
+            "--git-history",
+            "main",
+            "--grep",
+            "hunter2",
+            "--format",
+            "compact",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("notes.txt"))
+        .stdout(predicate::str::contains("side.txt").not());
+}
+
+#[test]
+fn git_history_runs_the_ruleset_once_per_distinct_blob() {
+    let repo = history_repo();
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--git-history", "--format", "compact"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            ":app.py:1:1: warning forbidden_print",
+        ))
+        // app.py (2 versions) + unchanged.py (1): unchanged blobs aren't rescanned.
+        .stdout(predicate::str::contains("(scanned 3)"));
+}
+
+#[test]
+fn git_history_query_reports_the_introducing_commit() {
+    let repo = history_repo();
+    let first = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .output()
+        .unwrap();
+    let first = String::from_utf8(first.stdout).unwrap();
+    tree_police()
+        .current_dir(repo.path())
+        .args([
+            "--git-history",
+            "--query",
+            "((identifier) @fn (#eq? @fn \"print\"))",
+            "--format",
+            "compact",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "{}:app.py:1:1: @fn print",
+            &first[..12]
+        )));
+}
+
+#[test]
+fn git_history_outside_a_repo_is_an_internal_error() {
+    let dir = tempfile::tempdir().unwrap();
+    tree_police()
+        .current_dir(dir.path())
+        .args(["--git-history", "--grep", "x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("inside a git repository"));
+}

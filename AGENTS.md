@@ -62,7 +62,7 @@ no findings, `1` = findings detected (suitable for CI gates), `2` = internal err
 ├── python/pyproject.toml      # maturin `bindings = "bin"`: ships the binary as a PyPI wheel
 ├── .pre-commit-hooks.yaml     # `tree-police` (python, PyPI wheel) + `tree-police-docker` hooks
 ├── .github/workflows/         # image (ghcr.io), CLI tarballs (GitHub Release), wheels (PyPI)
-├── src/                       # main, registry, rules, scan, report, severity, config, suppress, baseline, casetest
+├── src/                       # main, registry, rules, scan, history (--git-history), report, severity, config, suppress, baseline, casetest
 ├── tests/cli.rs               # black-box CLI tests
 ├── tests/query_cases.rs       # per-rule annotated fixture tests (see below)
 ├── .envrc                     # direnv: `use flake`

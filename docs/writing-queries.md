@@ -186,6 +186,12 @@ the examples above. Written at the top level, `(identifier) @x (#eq? @x "self")`
 is valid tree-sitter syntax but the predicate is attached to nothing, so every
 identifier matches. tree-police rejects that form with an error instead.
 
+To find a string, pin the node type it lives in, e.g.
+`((string_content) @s (#match? @s "hunter2"))` or `((comment) @c (#match? @c
+"TODO"))`. A wildcard `((_) @x (#match? @x "hunter2"))` also matches every
+ancestor whose text contains the string, so each hit comes back once per
+enclosing node. For plain text with no syntax involved, use `--grep` instead.
+
 ## Special nodes
 
 ```scheme

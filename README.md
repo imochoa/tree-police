@@ -349,6 +349,49 @@ code is always `0`, and `--fail-on`/`--min-severity`/`--rule`/`--category`
 don't apply (none have meaning without a severity/rule-id/category).
 `--format json`/`jsonl` both work, for scripting.
 
+### Plain-text search
+
+`--grep '<regex>'` skips tree-sitter entirely and searches every text file
+line by line, like ripgrep: any extension, no `--lang`, binary files
+skipped. Use `(?i)` for a case-insensitive search. Matches are reported
+like ad-hoc query captures (as `@grep`), and it always exits `0`.
+
+```bash
+tree-police --grep '(?i)api[_-]?key' --format compact
+```
+
+When you care *where* a string appears (only in comments, only as an
+identifier), a query does that and `--grep` can't:
+
+```bash
+tree-police --query '((comment) @todo (#match? @todo "TODO"))' --lang python
+```
+
+### Searching git history
+
+`--git-history` runs any of the above (the ruleset, `--query` or `--grep`)
+over every file version in the repo's history rather than the working
+tree, so you can find secrets or forbidden patterns that were committed and
+later removed. It scans all refs by default; to narrow it, pass revisions
+(space-separated, anything `git log` takes), e.g. `--git-history main` or
+`--git-history 'v0.2.0..HEAD'`. `paths` become git pathspecs.
+
+```console
+$ tree-police --git-history --grep 'docker_image' AGENTS.md
+1a6dd93c9ec4:AGENTS.md
+  9:51  @grep
+     9 | A declarative linter, embeddable as a pre-commit `docker_image` hook: `.scm`
+                                                           ^^^^^^^^^^^^
+[... more matches ...]
+```
+
+Each distinct file version (blob) is read and parsed exactly once, however
+many commits contain it, and is reported as `<commit>:<path>` at the
+oldest commit that introduced it. That string works with `git show`
+as-is. Results come out oldest commit first. It needs `git` on `PATH` and
+must run inside the repository. Config scoping and suppression comments
+still apply. Baselines don't, since they record working-tree paths.
+
 See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
 rule, adding a language, query-authoring gotchas).
 

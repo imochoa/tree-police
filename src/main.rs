@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
 use owo_colors::OwoColorize;
+use regex::bytes::Regex;
 use tracing_subscriber::EnvFilter;
 use tree_sitter::{Parser as TsParser, Query};
 
 use tree_police::baseline::Baseline;
 use tree_police::casetest;
 use tree_police::config::{Catalog, Config};
+use tree_police::history;
 use tree_police::registry;
 use tree_police::report::{self, Format};
 use tree_police::rules;
@@ -91,6 +93,33 @@ struct Args {
     /// Same as --query, read from a file instead of the command line.
     #[arg(long, conflicts_with_all = ["query", "show_tree", "list_rules"])]
     query_file: Option<PathBuf>,
+
+    /// Plain regex to search for, line by line like ripgrep, instead of
+    /// running tree-sitter queries. Searches every text file whatever its
+    /// extension, so no grammar or --lang is involved. Prefix the pattern
+    /// with `(?i)` for a case-insensitive search. Like --query, a search
+    /// rather than a lint gate: always exits 0.
+    #[arg(
+        long,
+        value_name = "REGEX",
+        conflicts_with_all = ["query", "query_file", "show_tree", "list_rules", "test", "update_baseline", "lang"]
+    )]
+    grep: Option<String>,
+
+    /// Scan every file version in the git history instead of the working
+    /// tree: all refs by default, or the given revisions (space-separated,
+    /// e.g. `main` or `v0.2.0..HEAD`). `paths` become git pathspecs. Each
+    /// distinct file version is scanned once and reported as
+    /// `<commit>:<path>` at the oldest commit that introduced it, which
+    /// `git show` accepts as-is. Works with the ruleset, --query and --grep.
+    #[arg(
+        long,
+        value_name = "REVS",
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with_all = ["show_tree", "list_rules", "test", "update_baseline", "baseline"]
+    )]
+    git_history: Option<String>,
 
     /// Language for --query/--query-file. Inferred automatically when
     /// `paths` resolve to files of exactly one registered language;
@@ -182,6 +211,33 @@ fn run(args: Args) -> Result<i32> {
         return Ok(0);
     }
 
+    // `--git-history`'s blobs, listed once up front for whichever mode runs.
+    let history = match &args.git_history {
+        Some(revs) => {
+            let revs: Vec<String> = revs.split_whitespace().map(String::from).collect();
+            Some(history::list_blobs(&revs, &args.paths)?)
+        }
+        None => None,
+    };
+    let walk_opts = ScanOptions {
+        respect_gitignore: !args.no_ignore,
+        hidden: args.hidden,
+        skip_dirs: Vec::new(),
+    };
+
+    if let Some(pattern) = &args.grep {
+        let regex =
+            Regex::new(pattern).with_context(|| format!("invalid --grep regex {pattern:?}"))?;
+        let (matches, stats) = match &history {
+            Some(blobs) => history::grep(blobs, &regex)?,
+            None => scan::grep(&args.paths, &regex, &walk_opts)?,
+        };
+        let mut out = anstream::stdout();
+        report::render_matches(args.format, &matches, &stats, &mut out)?;
+        out.flush().ok();
+        return Ok(0);
+    }
+
     let ad_hoc_query_source = match (&args.query, &args.query_file) {
         (Some(q), _) => Some(q.clone()),
         (None, Some(path)) => Some(
@@ -191,17 +247,13 @@ fn run(args: Args) -> Result<i32> {
         (None, None) => None,
     };
     if let Some(source) = ad_hoc_query_source {
-        let opts = ScanOptions {
-            respect_gitignore: !args.no_ignore,
-            hidden: args.hidden,
-            skip_dirs: Vec::new(),
-        };
         return run_ad_hoc_query(
             &source,
             args.lang.as_deref(),
             &args.paths,
+            history.as_deref(),
             args.format,
-            &opts,
+            &walk_opts,
         );
     }
 
@@ -216,12 +268,7 @@ fn run(args: Args) -> Result<i32> {
 
     if let Some(dir) = &args.test {
         let dir = dir.clone().unwrap_or_else(|| args.rules_dir.join("tests"));
-        let opts = ScanOptions {
-            respect_gitignore: !args.no_ignore,
-            hidden: args.hidden,
-            skip_dirs: Vec::new(),
-        };
-        return run_fixture_tests(&dir, &ruleset, &opts, &mut out);
+        return run_fixture_tests(&dir, &ruleset, &walk_opts, &mut out);
     }
 
     let opts = ScanOptions {
@@ -234,7 +281,10 @@ fn run(args: Args) -> Result<i32> {
         Some(path) => Config::load_explicit(path, &catalog)?,
         None => Config::load_default(&args.rules_dir, &catalog)?,
     };
-    let (mut findings, mut stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
+    let (mut findings, mut stats) = match &history {
+        Some(blobs) => history::scan(blobs, &ruleset, &config)?,
+        None => scan::scan(&args.paths, &ruleset, &config, &opts)?,
+    };
 
     if args.update_baseline {
         let (path, root) = baseline_location(&args)?;
@@ -249,7 +299,8 @@ fn run(args: Args) -> Result<i32> {
         out.flush().ok();
         return Ok(0);
     }
-    if !args.no_baseline {
+    // A baseline records working-tree paths, which history findings never match.
+    if !args.no_baseline && history.is_none() {
         let (path, root) = baseline_location(&args)?;
         if args.baseline.is_some() || path.is_file() {
             stats.baselined = Baseline::load(path, root)?.apply(&mut findings);
@@ -399,20 +450,25 @@ fn run_ad_hoc_query(
     source: &str,
     lang_name: Option<&str>,
     paths: &[PathBuf],
+    history: Option<&[history::Blob]>,
     format: Format,
     opts: &ScanOptions,
 ) -> Result<i32> {
-    let spec = match lang_name {
-        Some(name) => registry::by_name(name)
+    let spec = match (lang_name, history) {
+        (Some(name), _) => registry::by_name(name)
             .ok_or_else(|| anyhow!("unknown language {name:?} (see --list-rules for the ones with embedded rules, or src/registry.rs for every registered language)"))?,
-        None => scan::infer_language(paths, opts)?,
+        (None, Some(blobs)) => history::infer_language(blobs)?,
+        (None, None) => scan::infer_language(paths, opts)?,
     };
 
     rules::check_top_level_predicates(source)?;
     let query = Query::new(&spec.language(), source)
         .with_context(|| format!("failed to compile query for language {}", spec.name))?;
 
-    let (matches, stats) = scan::run_query(paths, spec, &query, opts)?;
+    let (matches, stats) = match history {
+        Some(blobs) => history::run_query(blobs, spec, &query)?,
+        None => scan::run_query(paths, spec, &query, opts)?,
+    };
 
     let mut out = anstream::stdout();
     report::render_matches(format, &matches, &stats, &mut out)?;
