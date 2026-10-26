@@ -376,21 +376,51 @@ later removed. It scans all refs by default; to narrow it, pass revisions
 (space-separated, anything `git log` takes), e.g. `--git-history main` or
 `--git-history 'v0.2.0..HEAD'`. `paths` become git pathspecs.
 
+Each distinct file version (blob) is read and parsed exactly once, however
+many commits contain it. It needs `git` on `PATH` and must run inside the
+repository. Config scoping and suppression comments still apply. Baselines
+don't, since they record working-tree paths.
+
+The same line usually shows up in many file versions, so the human formats
+collapse it into one row per *occurrence* (same file, rule or capture, and
+line text; line numbers drift between versions, so they don't count). Each
+row says when the line first appeared (commit, date, author, message), the
+newest version that still has it, how many versions contain it, and whether
+`HEAD` still does:
+
 ```console
-$ tree-police --git-history --grep 'docker_image' AGENTS.md
-1a6dd93c9ec4:AGENTS.md
-  9:51  @grep
-     9 | A declarative linter, embeddable as a pre-commit `docker_image` hook: `.scm`
-                                                           ^^^^^^^^^^^^
-[... more matches ...]
+$ tree-police --git-history --grep 'docker_image' AGENTS.md docs/
+AGENTS.md
+  LINE   MATCH  FIRST SEEN          AUTHOR   LAST SEEN           VERSIONS  IN HEAD  COMMIT
+  9:51   @grep  1a6dd93 2026-10-03  imochoa  700b5c0 2026-10-26        12  yes      Initial import: tree-police, a pre-commit-ready A…
+         │ A declarative linter, embeddable as a pre-commit `docker_image` hook: `.scm`
+
+docs/pre-commit-example.md
+  LINE   MATCH  FIRST SEEN          AUTHOR   LAST SEEN           VERSIONS  IN HEAD  COMMIT
+  113:4  @grep  df46bec 2026-10-03  imochoa  dca9e98 2026-10-14         5  yes      Multi-arch images, repo-local pre-commit/renovate…
+         │ `docker_image` language mounts your repo at `/src` and runs with that as
+
+Summary: 2 distinct match(es) in 2 file(s), 2 still in HEAD. 17 hit(s) across 17 file version(s) (scanned 23 file version(s) introduced by 16 commit(s)).
 ```
 
-Each distinct file version (blob) is read and parsed exactly once, however
-many commits contain it, and is reported as `<commit>:<path>` at the
-oldest commit that introduced it. That string works with `git show`
-as-is. Results come out oldest commit first. It needs `git` on `PATH` and
-must run inside the repository. Config scoping and suppression comments
-still apply. Baselines don't, since they record working-tree paths.
+`IN HEAD: no` means the line was removed, or only ever lived on another
+branch. "Last seen" is the commit that introduced the newest version still
+containing the line, not the commit that removed it (`git log -S'<text>'
+-- <file>` finds that). `--format compact` prints the same rows one per
+line (`file:line:col: match first=<commit> <date> last=<commit> <date>
+versions=N head=yes|no`), and `--format summary` counts occurrences per
+rule or capture.
+
+`--format json` / `jsonl` are the data formats. They don't collapse
+anything: every hit in every file version is a flat record with the usual
+finding/match fields (`file` is a plain path) plus `commit`, `commit_date`,
+`author`, `subject`, `blob` and `at_head`. Group or filter them however you
+like, e.g. with `jq`, or browse them as a sortable table with
+[VisiData](https://www.visidata.org/):
+
+```bash
+tree-police --git-history --grep '(?i)api[_-]?key' --format jsonl | vd -f jsonl
+```
 
 See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
 rule, adding a language, query-authoring gotchas).

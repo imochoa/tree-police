@@ -763,6 +763,25 @@ fn history_repo() -> tempfile::TempDir {
     repo
 }
 
+fn history_output(repo: &tempfile::TempDir, args: &[&str]) -> String {
+    let output = tree_police()
+        .current_dir(repo.path())
+        .arg("--git-history")
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn first_commit(repo: &tempfile::TempDir) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
 #[test]
 fn git_history_grep_finds_deleted_content_on_every_ref() {
     let repo = history_repo();
@@ -773,23 +792,59 @@ fn git_history_grep_finds_deleted_content_on_every_ref() {
         .success()
         .stdout(predicate::str::is_empty());
 
-    let output = tree_police()
-        .current_dir(repo.path())
-        .args(["--git-history", "--grep", "hunter2", "--format", "compact"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8(output).unwrap();
-    let lines: Vec<&str> = text.lines().collect();
+    let text = history_output(&repo, &["--grep", "hunter2", "--format", "compact"]);
+    let lines: Vec<&str> = text.lines().filter(|l| l.contains("@grep")).collect();
     assert_eq!(lines.len(), 2, "{text}");
-    // Oldest commit first, as `<commit>:<path>`.
+    let first = &first_commit(&repo)[..7];
     assert!(
-        lines[0].ends_with(":notes.txt:1:8: @grep hunter2"),
+        lines[0].starts_with(&format!("notes.txt:1:8: @grep first={first} ")),
         "{text}"
     );
-    assert!(lines[1].ends_with(":side.txt:1:1: @grep hunter2"), "{text}");
+    assert!(lines[0].ends_with("versions=1 head=no"), "{text}");
+    // Only on the unmerged branch, so not in HEAD either.
+    assert!(lines[1].starts_with("side.txt:1:1: @grep"), "{text}");
+    assert!(lines[1].ends_with("head=no"), "{text}");
+}
+
+#[test]
+fn git_history_collapses_a_line_that_survives_edits() {
+    let repo = history_repo();
+    // `x = 1` is in both versions of app.py (on line 2, then line 1).
+    let text = history_output(&repo, &["--grep", "x = 1", "--format", "compact"]);
+    let lines: Vec<&str> = text.lines().filter(|l| l.contains("@grep")).collect();
+    assert_eq!(lines, [lines[0]], "{text}");
+    assert!(lines[0].starts_with("app.py:2:1: @grep"), "{text}");
+    assert!(lines[0].ends_with("versions=2 head=yes"), "{text}");
+    assert!(
+        text.contains("1 distinct match(es) in 1 file(s), 1 still in HEAD. 2 hit(s)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn git_history_pretty_prints_a_table_per_file() {
+    let repo = history_repo();
+    let text = history_output(&repo, &["--grep", "hunter2"]);
+    assert!(text.contains("FIRST SEEN"), "{text}");
+    assert!(text.contains("IN HEAD"), "{text}");
+    assert!(text.contains("│ token: hunter2"), "{text}");
+    // The introducing commit's subject.
+    assert!(text.contains("  one\n"), "{text}");
+}
+
+#[test]
+fn git_history_json_keeps_every_hit_with_commit_fields() {
+    let repo = history_repo();
+    let text = history_output(&repo, &["--grep", "x = 1", "--format", "json"]);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+    let hits = value.as_array().expect("array");
+    assert_eq!(hits.len(), 2, "{text}");
+    assert_eq!(hits[0]["file"], "app.py");
+    assert_eq!(hits[0]["commit"], first_commit(&repo));
+    assert_eq!(hits[0]["subject"], "one");
+    assert_eq!(hits[0]["at_head"], false);
+    assert_eq!(hits[1]["subject"], "two");
+    assert_eq!(hits[1]["at_head"], true);
 }
 
 #[test]
@@ -820,36 +875,30 @@ fn git_history_runs_the_ruleset_once_per_distinct_blob() {
         .assert()
         .code(1)
         .stdout(predicate::str::contains(
-            ":app.py:1:1: warning forbidden_print",
+            "app.py:1:1: warning forbidden_print first=",
         ))
+        .stdout(predicate::str::contains("head=no"))
         // app.py (2 versions) + unchanged.py (1): unchanged blobs aren't rescanned.
-        .stdout(predicate::str::contains("(scanned 3)"));
+        .stdout(predicate::str::contains("(scanned 3 file version(s)"));
 }
 
 #[test]
 fn git_history_query_reports_the_introducing_commit() {
     let repo = history_repo();
-    let first = std::process::Command::new("git")
-        .current_dir(repo.path())
-        .args(["rev-list", "--max-parents=0", "HEAD"])
-        .output()
-        .unwrap();
-    let first = String::from_utf8(first.stdout).unwrap();
-    tree_police()
-        .current_dir(repo.path())
-        .args([
-            "--git-history",
+    let first = first_commit(&repo);
+    let text = history_output(
+        &repo,
+        &[
             "--query",
             "((identifier) @fn (#eq? @fn \"print\"))",
             "--format",
             "compact",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(format!(
-            "{}:app.py:1:1: @fn print",
-            &first[..12]
-        )));
+        ],
+    );
+    assert!(
+        text.contains(&format!("app.py:1:1: @fn first={} ", &first[..7])),
+        "{text}"
+    );
 }
 
 #[test]

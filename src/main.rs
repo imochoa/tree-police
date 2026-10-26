@@ -15,11 +15,11 @@ use tree_sitter::{Parser as TsParser, Query};
 use tree_police::baseline::Baseline;
 use tree_police::casetest;
 use tree_police::config::{Catalog, Config};
-use tree_police::history;
+use tree_police::history::History;
 use tree_police::registry;
 use tree_police::report::{self, Format};
 use tree_police::rules;
-use tree_police::scan::{self, ScanOptions};
+use tree_police::scan::{self, Finding, ScanOptions};
 use tree_police::severity::Severity;
 use tree_police::tree_view;
 
@@ -215,7 +215,7 @@ fn run(args: Args) -> Result<i32> {
     let history = match &args.git_history {
         Some(revs) => {
             let revs: Vec<String> = revs.split_whitespace().map(String::from).collect();
-            Some(history::list_blobs(&revs, &args.paths)?)
+            Some(History::load(&revs, &args.paths)?)
         }
         None => None,
     };
@@ -228,12 +228,17 @@ fn run(args: Args) -> Result<i32> {
     if let Some(pattern) = &args.grep {
         let regex =
             Regex::new(pattern).with_context(|| format!("invalid --grep regex {pattern:?}"))?;
-        let (matches, stats) = match &history {
-            Some(blobs) => history::grep(blobs, &regex)?,
-            None => scan::grep(&args.paths, &regex, &walk_opts)?,
-        };
         let mut out = anstream::stdout();
-        report::render_matches(args.format, &matches, &stats, &mut out)?;
+        match &history {
+            Some(history) => {
+                let (hits, stats) = history.grep(&regex)?;
+                report::render_history(args.format, history, &hits, &stats, &mut out)?;
+            }
+            None => {
+                let (matches, stats) = scan::grep(&args.paths, &regex, &walk_opts)?;
+                report::render_matches(args.format, &matches, &stats, &mut out)?;
+            }
+        }
         out.flush().ok();
         return Ok(0);
     }
@@ -251,7 +256,7 @@ fn run(args: Args) -> Result<i32> {
             &source,
             args.lang.as_deref(),
             &args.paths,
-            history.as_deref(),
+            history.as_ref(),
             args.format,
             &walk_opts,
         );
@@ -281,10 +286,26 @@ fn run(args: Args) -> Result<i32> {
         Some(path) => Config::load_explicit(path, &catalog)?,
         None => Config::load_default(&args.rules_dir, &catalog)?,
     };
-    let (mut findings, mut stats) = match &history {
-        Some(blobs) => history::scan(blobs, &ruleset, &config)?,
-        None => scan::scan(&args.paths, &ruleset, &config, &opts)?,
+    let keep = |f: &Finding| {
+        args.min_severity.is_none_or(|min| f.severity >= min)
+            && (args.rules.is_empty() || args.rules.iter().any(|r| r == &f.rule_id))
+            && (args.categories.is_empty()
+                || f.category
+                    .as_deref()
+                    .is_some_and(|c| args.categories.iter().any(|arg| arg == c)))
     };
+
+    if let Some(history) = &history {
+        // No baseline here: it records working-tree paths, which history
+        // findings never match.
+        let (mut hits, stats) = history.scan(&ruleset, &config)?;
+        hits.retain(|hit| keep(&hit.item));
+        report::render_history(args.format, history, &hits, &stats, &mut out)?;
+        out.flush().ok();
+        return Ok(exit_code(args.fail_on, hits.iter().map(|hit| &hit.item)));
+    }
+
+    let (mut findings, mut stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
 
     if args.update_baseline {
         let (path, root) = baseline_location(&args)?;
@@ -299,36 +320,26 @@ fn run(args: Args) -> Result<i32> {
         out.flush().ok();
         return Ok(0);
     }
-    // A baseline records working-tree paths, which history findings never match.
-    if !args.no_baseline && history.is_none() {
+    if !args.no_baseline {
         let (path, root) = baseline_location(&args)?;
         if args.baseline.is_some() || path.is_file() {
             stats.baselined = Baseline::load(path, root)?.apply(&mut findings);
         }
     }
 
-    if let Some(min) = args.min_severity {
-        findings.retain(|f| f.severity >= min);
-    }
-    if !args.rules.is_empty() {
-        findings.retain(|f| args.rules.iter().any(|r| r == &f.rule_id));
-    }
-    if !args.categories.is_empty() {
-        findings.retain(|f| {
-            f.category
-                .as_deref()
-                .is_some_and(|c| args.categories.iter().any(|arg| arg == c))
-        });
-    }
+    findings.retain(keep);
 
     report::render(args.format, &findings, &stats, &mut out)?;
     out.flush().ok();
+    Ok(exit_code(args.fail_on, &findings))
+}
 
-    let exit_code = match fail_threshold(args.fail_on) {
-        Some(threshold) if findings.iter().any(|f| f.severity >= threshold) => 1,
+/// 1 if any finding is at or above `--fail-on`, else 0.
+fn exit_code<'a>(fail_on: FailOn, findings: impl IntoIterator<Item = &'a Finding>) -> i32 {
+    match fail_threshold(fail_on) {
+        Some(threshold) if findings.into_iter().any(|f| f.severity >= threshold) => 1,
         _ => 0,
-    };
-    Ok(exit_code)
+    }
 }
 
 /// The baseline file and the root its paths are relative to: an explicit
@@ -450,14 +461,14 @@ fn run_ad_hoc_query(
     source: &str,
     lang_name: Option<&str>,
     paths: &[PathBuf],
-    history: Option<&[history::Blob]>,
+    history: Option<&History>,
     format: Format,
     opts: &ScanOptions,
 ) -> Result<i32> {
     let spec = match (lang_name, history) {
         (Some(name), _) => registry::by_name(name)
             .ok_or_else(|| anyhow!("unknown language {name:?} (see --list-rules for the ones with embedded rules, or src/registry.rs for every registered language)"))?,
-        (None, Some(blobs)) => history::infer_language(blobs)?,
+        (None, Some(history)) => history.infer_language()?,
         (None, None) => scan::infer_language(paths, opts)?,
     };
 
@@ -465,13 +476,17 @@ fn run_ad_hoc_query(
     let query = Query::new(&spec.language(), source)
         .with_context(|| format!("failed to compile query for language {}", spec.name))?;
 
-    let (matches, stats) = match history {
-        Some(blobs) => history::run_query(blobs, spec, &query)?,
-        None => scan::run_query(paths, spec, &query, opts)?,
-    };
-
     let mut out = anstream::stdout();
-    report::render_matches(format, &matches, &stats, &mut out)?;
+    match history {
+        Some(history) => {
+            let (hits, stats) = history.run_query(spec, &query)?;
+            report::render_history(format, history, &hits, &stats, &mut out)?;
+        }
+        None => {
+            let (matches, stats) = scan::run_query(paths, spec, &query, opts)?;
+            report::render_matches(format, &matches, &stats, &mut out)?;
+        }
+    }
     out.flush().ok();
     Ok(0)
 }
