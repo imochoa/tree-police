@@ -703,3 +703,23 @@ fn fixture_tests_pass_fail_and_stay_out_of_normal_scans() {
             "foo.py:5: expected @no_foo to fire on the line above",
         ));
 }
+
+#[test]
+fn completions_print_a_zsh_script_with_flags_and_languages() {
+    tree_police()
+        .args(["--completions", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("#compdef tree-police"))
+        .stdout(predicate::str::contains("--show-tree"))
+        // --lang completes the registered language names.
+        .stdout(predicate::str::contains("terraform"));
+}
+
+#[test]
+fn completions_cannot_be_combined_with_a_scan() {
+    tree_police()
+        .args(["--completions", "zsh", "--hidden"])
+        .assert()
+        .code(2);
+}

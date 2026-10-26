@@ -90,6 +90,27 @@ tar xzf tree-police-aarch64-apple-darwin.tar.gz
 `aarch64-unknown-linux-musl`, `x86_64-apple-darwin`, or
 `aarch64-apple-darwin`.)
 
+### Shell completions
+
+`tree-police --completions <shell>` prints a completion script for `zsh`,
+`bash`, `fish`, `elvish` or `powershell`. It completes every flag, the
+values of `--format`/`--min-severity`/`--fail-on`, the language names for
+`--lang`, and file or directory paths where a flag expects one. For zsh, save
+it as `_tree-police` in a directory on your `$fpath`, before `compinit` runs:
+
+```bash
+mkdir -p ~/.zfunc
+tree-police --completions zsh > ~/.zfunc/_tree-police
+```
+
+```zsh
+# ~/.zshrc, above `compinit` (oh-my-zsh runs compinit for you in oh-my-zsh.sh)
+fpath=(~/.zfunc $fpath)
+```
+
+Then start a new shell (or `rm -f ~/.zcompdump; compinit`). Rerun the first
+command after upgrading so new flags complete too.
+
 ## Repo-local rules
 
 Drop extra `<label>-<code>.scm` files (same convention as `queries/`, see
