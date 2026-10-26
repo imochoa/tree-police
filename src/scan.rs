@@ -1,5 +1,6 @@
 //! The scan engine: walk the filesystem, parse each file once, run every
-//! query for its language, and collect [`Finding`]s.
+//! query for its language, and collect [`Finding`]s. The per-file halves
+//! (`*_source`) also back the git-history scan in [`crate::history`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use regex::bytes::Regex;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
@@ -239,6 +241,22 @@ fn collect_files_for_language(
     files
 }
 
+/// Every file under `paths`, whatever its extension -- for `--grep`.
+fn collect_all_files(paths: &[PathBuf], opts: &ScanOptions) -> Vec<PathBuf> {
+    let builder = build_walker(paths, opts);
+    let mut files = Vec::new();
+    for result in builder.build() {
+        match result {
+            Ok(entry) if entry.file_type().is_some_and(|t| t.is_file()) => {
+                files.push(entry.into_path());
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!("walk error: {err}"),
+        }
+    }
+    files
+}
+
 /// Walk `paths` and return the single registered language present among
 /// matched files. Errors (naming what it found) on zero or more than one
 /// distinct language -- ad-hoc queries are grammar-specific, so an
@@ -322,19 +340,29 @@ pub fn run_query(
 }
 
 fn query_file(parser: &mut Parser, path: &Path, spec: &LangSpec, query: &Query) -> Vec<Match> {
-    let source = match fs::read(path) {
-        Ok(bytes) => bytes,
+    match fs::read(path) {
+        Ok(source) => query_source(parser, path, spec, &source, query),
         Err(err) => {
             tracing::warn!("skipping {}: {err}", path.display());
-            return Vec::new();
+            Vec::new()
         }
-    };
+    }
+}
 
+/// [`query_file`] on bytes already in memory (a working-tree file, or a
+/// blob from git history -- see [`crate::history`]).
+pub(crate) fn query_source(
+    parser: &mut Parser,
+    path: &Path,
+    spec: &LangSpec,
+    source: &[u8],
+    query: &Query,
+) -> Vec<Match> {
     if parser.set_language(&spec.language()).is_err() {
         tracing::error!("could not load grammar for {}", spec.name);
         return Vec::new();
     }
-    let Some(tree) = parser.parse(&source, None) else {
+    let Some(tree) = parser.parse(source, None) else {
         tracing::warn!("failed to parse {}", path.display());
         return Vec::new();
     };
@@ -342,7 +370,7 @@ fn query_file(parser: &mut Parser, path: &Path, spec: &LangSpec, query: &Query) 
     let capture_names = query.capture_names();
     let mut findings = Vec::new();
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(query, tree.root_node(), source.as_slice());
+    let mut matches = cursor.matches(query, tree.root_node(), source);
     while let Some(m) = matches.next() {
         for capture in m.captures {
             let name = capture_names[capture.index as usize];
@@ -359,12 +387,82 @@ fn query_file(parser: &mut Parser, path: &Path, spec: &LangSpec, query: &Query) 
                 column: start.column + 1,
                 end_line: end.row + 1,
                 end_column: end.column + 1,
-                text: node.utf8_text(&source).unwrap_or_default().to_string(),
-                snippet: line_text(&source, node.start_byte()),
+                text: node.utf8_text(source).unwrap_or_default().to_string(),
+                snippet: line_text(source, node.start_byte()),
             });
         }
     }
     findings
+}
+
+/// `--grep`: a plain line-by-line regex search over every text file under
+/// `paths`, whatever its extension -- no grammar involved, so it also
+/// covers files no registered language parses. Binary files are skipped.
+pub fn grep(
+    paths: &[PathBuf],
+    regex: &Regex,
+    opts: &ScanOptions,
+) -> Result<(Vec<Match>, ScanStats)> {
+    if paths.is_empty() {
+        return Ok((Vec::new(), ScanStats::default()));
+    }
+
+    let files = collect_all_files(paths, opts);
+    let per_file: Vec<Vec<Match>> = files
+        .par_iter()
+        .map(|path| match fs::read(path) {
+            Ok(source) => grep_source(path, &source, regex),
+            Err(err) => {
+                tracing::warn!("skipping {}: {err}", path.display());
+                Vec::new()
+            }
+        })
+        .collect();
+
+    let files_with_findings = per_file.iter().filter(|m| !m.is_empty()).count();
+    let mut matches: Vec<Match> = per_file.into_iter().flatten().collect();
+    matches.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.column.cmp(&b.column))
+    });
+
+    let stats = ScanStats {
+        files_scanned: files.len(),
+        files_with_findings,
+        ..ScanStats::default()
+    };
+    Ok((matches, stats))
+}
+
+/// Every match of `regex` in `source`, one line at a time (like ripgrep
+/// without `--multiline`). Reported with the capture name `grep`. Empty for
+/// binary content (a NUL byte in the first 8 KiB, ripgrep's heuristic).
+pub(crate) fn grep_source(path: &Path, source: &[u8], regex: &Regex) -> Vec<Match> {
+    if source[..source.len().min(8192)].contains(&0) {
+        return Vec::new();
+    }
+    let mut matches = Vec::new();
+    for (row, line) in source.split(|&b| b == b'\n').enumerate() {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        for m in regex.find_iter(line) {
+            if m.is_empty() {
+                continue;
+            }
+            matches.push(Match {
+                file: path.to_path_buf(),
+                capture: "grep".to_string(),
+                line: row + 1,
+                column: m.start() + 1,
+                end_line: row + 1,
+                end_column: m.end() + 1,
+                text: String::from_utf8_lossy(m.as_bytes()).into_owned(),
+                snippet: String::from_utf8_lossy(line).trim_end().to_string(),
+            });
+        }
+    }
+    matches
 }
 
 /// Findings for one file after config scoping and suppressions, plus how
@@ -382,23 +480,40 @@ fn scan_file(
     let Some(spec) = registry::for_extension(ext) else {
         return (Vec::new(), 0);
     };
-    let Some(lang_rules) = ruleset.language(spec.name) else {
+    if ruleset.language(spec.name).is_none() {
         return (Vec::new(), 0);
-    };
+    }
 
-    let source = match fs::read(path) {
-        Ok(bytes) => bytes,
+    match fs::read(path) {
+        Ok(source) => scan_source(parser, path, spec, &source, ruleset, config, catalog),
         Err(err) => {
             tracing::warn!("skipping {}: {err}", path.display());
-            return (Vec::new(), 0);
+            (Vec::new(), 0)
         }
+    }
+}
+
+/// [`scan_file`] on bytes already in memory, for a language already
+/// resolved from the path. `path` is what config scoping and suppressions
+/// see, and what each finding reports.
+pub(crate) fn scan_source(
+    parser: &mut Parser,
+    path: &Path,
+    spec: &'static LangSpec,
+    source: &[u8],
+    ruleset: &Ruleset,
+    config: &Config,
+    catalog: &Catalog,
+) -> (Vec<Finding>, usize) {
+    let Some(lang_rules) = ruleset.language(spec.name) else {
+        return (Vec::new(), 0);
     };
 
     if parser.set_language(&spec.language()).is_err() {
         tracing::error!("could not load grammar for {}", spec.name);
         return (Vec::new(), 0);
     }
-    let Some(tree) = parser.parse(&source, None) else {
+    let Some(tree) = parser.parse(source, None) else {
         tracing::warn!("failed to parse {}", path.display());
         return (Vec::new(), 0);
     };
@@ -407,7 +522,7 @@ fn scan_file(
     let mut findings = Vec::new();
     let mut cursor = QueryCursor::new();
     for cq in &lang_rules.queries {
-        let mut matches = cursor.matches(&cq.query, root, source.as_slice());
+        let mut matches = cursor.matches(&cq.query, root, source);
         while let Some(m) = matches.next() {
             // The one non-helper capture is the finding.
             let Some(capture) = m.captures.iter().find(|c| !cq.is_helper(c.index)) else {
@@ -429,13 +544,13 @@ fn scan_file(
                 end_line: end.row + 1,
                 end_column: end.column + 1,
                 query_file: cq.source_path.clone(),
-                snippet: line_text(&source, node.start_byte()),
+                snippet: line_text(source, node.start_byte()),
             });
         }
     }
 
     config.apply(path, &mut findings);
-    let suppressed = Suppressions::collect(path, &tree, &source, catalog).apply(&mut findings);
+    let suppressed = Suppressions::collect(path, &tree, source, catalog).apply(&mut findings);
     (findings, suppressed)
 }
 

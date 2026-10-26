@@ -703,3 +703,211 @@ fn fixture_tests_pass_fail_and_stay_out_of_normal_scans() {
             "foo.py:5: expected @no_foo to fire on the line above",
         ));
 }
+
+// --- --grep and --git-history ---------------------------------------------
+
+#[test]
+fn grep_searches_any_text_file_without_a_grammar() {
+    let repo = temp_repo(&[
+        ("notes.txt", "nothing\nthe api_key lives here\n"),
+        ("a.py", "API_KEY = 1\n"),
+        ("blob.bin", "api_key\0binary"),
+    ]);
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--grep", "(?i)api_key", "--format", "compact"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("notes.txt:2:5: @grep api_key"))
+        .stdout(predicate::str::contains("a.py:1:1: @grep API_KEY"))
+        .stdout(predicate::str::contains("blob.bin").not());
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .current_dir(dir)
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .status()
+        .expect("git should run");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// A repo whose violations only exist in history: commit 1 adds them, commit
+/// 2 removes them, and an unmerged `side` branch adds one more.
+fn history_repo() -> tempfile::TempDir {
+    let repo = temp_repo(&[
+        ("app.py", "print(\"debug\")\nx = 1\n"),
+        ("unchanged.py", "y = 2\n"),
+        ("notes.txt", "token: hunter2\n"),
+    ]);
+    let dir = repo.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "one"]);
+    std::fs::write(dir.join("app.py"), "x = 1\n").unwrap();
+    std::fs::remove_file(dir.join("notes.txt")).unwrap();
+    git(dir, &["commit", "-q", "-am", "two"]);
+    git(dir, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(dir.join("side.txt"), "hunter2 again\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "side"]);
+    git(dir, &["checkout", "-q", "main"]);
+    repo
+}
+
+fn history_output(repo: &tempfile::TempDir, args: &[&str]) -> String {
+    let output = tree_police()
+        .current_dir(repo.path())
+        .arg("--git-history")
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn first_commit(repo: &tempfile::TempDir) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn git_history_grep_finds_deleted_content_on_every_ref() {
+    let repo = history_repo();
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--grep", "hunter2", "--format", "compact"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let text = history_output(&repo, &["--grep", "hunter2", "--format", "compact"]);
+    let lines: Vec<&str> = text.lines().filter(|l| l.contains("@grep")).collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    let first = &first_commit(&repo)[..7];
+    assert!(
+        lines[0].starts_with(&format!("notes.txt:1:8: @grep first={first} ")),
+        "{text}"
+    );
+    assert!(lines[0].ends_with("versions=1 head=no"), "{text}");
+    // Only on the unmerged branch, so not in HEAD either.
+    assert!(lines[1].starts_with("side.txt:1:1: @grep"), "{text}");
+    assert!(lines[1].ends_with("head=no"), "{text}");
+}
+
+#[test]
+fn git_history_collapses_a_line_that_survives_edits() {
+    let repo = history_repo();
+    // `x = 1` is in both versions of app.py (on line 2, then line 1).
+    let text = history_output(&repo, &["--grep", "x = 1", "--format", "compact"]);
+    let lines: Vec<&str> = text.lines().filter(|l| l.contains("@grep")).collect();
+    assert_eq!(lines, [lines[0]], "{text}");
+    assert!(lines[0].starts_with("app.py:2:1: @grep"), "{text}");
+    assert!(lines[0].ends_with("versions=2 head=yes"), "{text}");
+    assert!(
+        text.contains("1 distinct match(es) in 1 file(s), 1 still in HEAD. 2 hit(s)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn git_history_pretty_prints_a_table_per_file() {
+    let repo = history_repo();
+    let text = history_output(&repo, &["--grep", "hunter2"]);
+    assert!(text.contains("FIRST SEEN"), "{text}");
+    assert!(text.contains("IN HEAD"), "{text}");
+    assert!(text.contains("│ token: hunter2"), "{text}");
+    // The introducing commit's subject.
+    assert!(text.contains("  one\n"), "{text}");
+}
+
+#[test]
+fn git_history_json_keeps_every_hit_with_commit_fields() {
+    let repo = history_repo();
+    let text = history_output(&repo, &["--grep", "x = 1", "--format", "json"]);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+    let hits = value.as_array().expect("array");
+    assert_eq!(hits.len(), 2, "{text}");
+    assert_eq!(hits[0]["file"], "app.py");
+    assert_eq!(hits[0]["commit"], first_commit(&repo));
+    assert_eq!(hits[0]["subject"], "one");
+    assert_eq!(hits[0]["at_head"], false);
+    assert_eq!(hits[1]["subject"], "two");
+    assert_eq!(hits[1]["at_head"], true);
+}
+
+#[test]
+fn git_history_revs_limit_which_refs_are_searched() {
+    let repo = history_repo();
+    tree_police()
+        .current_dir(repo.path())
+        .args([
+            "--git-history",
+            "main",
+            "--grep",
+            "hunter2",
+            "--format",
+            "compact",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("notes.txt"))
+        .stdout(predicate::str::contains("side.txt").not());
+}
+
+#[test]
+fn git_history_runs_the_ruleset_once_per_distinct_blob() {
+    let repo = history_repo();
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--git-history", "--format", "compact"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "app.py:1:1: warning forbidden_print first=",
+        ))
+        .stdout(predicate::str::contains("head=no"))
+        // app.py (2 versions) + unchanged.py (1): unchanged blobs aren't rescanned.
+        .stdout(predicate::str::contains("(scanned 3 file version(s)"));
+}
+
+#[test]
+fn git_history_query_reports_the_introducing_commit() {
+    let repo = history_repo();
+    let first = first_commit(&repo);
+    let text = history_output(
+        &repo,
+        &[
+            "--query",
+            "((identifier) @fn (#eq? @fn \"print\"))",
+            "--format",
+            "compact",
+        ],
+    );
+    assert!(
+        text.contains(&format!("app.py:1:1: @fn first={} ", &first[..7])),
+        "{text}"
+    );
+}
+
+#[test]
+fn git_history_outside_a_repo_is_an_internal_error() {
+    let dir = tempfile::tempdir().unwrap();
+    tree_police()
+        .current_dir(dir.path())
+        .args(["--git-history", "--grep", "x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("inside a git repository"));
+}

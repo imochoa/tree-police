@@ -11,6 +11,7 @@
 pub mod baseline;
 pub mod casetest;
 pub mod config;
+pub mod history;
 pub mod registry;
 pub mod report;
 pub mod rules;

@@ -349,6 +349,79 @@ code is always `0`, and `--fail-on`/`--min-severity`/`--rule`/`--category`
 don't apply (none have meaning without a severity/rule-id/category).
 `--format json`/`jsonl` both work, for scripting.
 
+### Plain-text search
+
+`--grep '<regex>'` skips tree-sitter entirely and searches every text file
+line by line, like ripgrep: any extension, no `--lang`, binary files
+skipped. Use `(?i)` for a case-insensitive search. Matches are reported
+like ad-hoc query captures (as `@grep`), and it always exits `0`.
+
+```bash
+tree-police --grep '(?i)api[_-]?key' --format compact
+```
+
+When you care *where* a string appears (only in comments, only as an
+identifier), a query does that and `--grep` can't:
+
+```bash
+tree-police --query '((comment) @todo (#match? @todo "TODO"))' --lang python
+```
+
+### Searching git history
+
+`--git-history` runs any of the above (the ruleset, `--query` or `--grep`)
+over every file version in the repo's history rather than the working
+tree, so you can find secrets or forbidden patterns that were committed and
+later removed. It scans all refs by default; to narrow it, pass revisions
+(space-separated, anything `git log` takes), e.g. `--git-history main` or
+`--git-history 'v0.2.0..HEAD'`. `paths` become git pathspecs.
+
+Each distinct file version (blob) is read and parsed exactly once, however
+many commits contain it. It needs `git` on `PATH` and must run inside the
+repository. Config scoping and suppression comments still apply. Baselines
+don't, since they record working-tree paths.
+
+The same line usually shows up in many file versions, so the human formats
+collapse it into one row per *occurrence* (same file, rule or capture, and
+line text; line numbers drift between versions, so they don't count). Each
+row says when the line first appeared (commit, date, author, message), the
+newest version that still has it, how many versions contain it, and whether
+`HEAD` still does:
+
+```console
+$ tree-police --git-history --grep 'docker_image' AGENTS.md docs/
+AGENTS.md
+  LINE   MATCH  FIRST SEEN          AUTHOR   LAST SEEN           VERSIONS  IN HEAD  COMMIT
+  9:51   @grep  1a6dd93 2026-10-03  imochoa  700b5c0 2026-10-26        12  yes      Initial import: tree-police, a pre-commit-ready A…
+         │ A declarative linter, embeddable as a pre-commit `docker_image` hook: `.scm`
+
+docs/pre-commit-example.md
+  LINE   MATCH  FIRST SEEN          AUTHOR   LAST SEEN           VERSIONS  IN HEAD  COMMIT
+  113:4  @grep  df46bec 2026-10-03  imochoa  dca9e98 2026-10-14         5  yes      Multi-arch images, repo-local pre-commit/renovate…
+         │ `docker_image` language mounts your repo at `/src` and runs with that as
+
+Summary: 2 distinct match(es) in 2 file(s), 2 still in HEAD. 17 hit(s) across 17 file version(s) (scanned 23 file version(s) introduced by 16 commit(s)).
+```
+
+`IN HEAD: no` means the line was removed, or only ever lived on another
+branch. "Last seen" is the commit that introduced the newest version still
+containing the line, not the commit that removed it (`git log -S'<text>'
+-- <file>` finds that). `--format compact` prints the same rows one per
+line (`file:line:col: match first=<commit> <date> last=<commit> <date>
+versions=N head=yes|no`), and `--format summary` counts occurrences per
+rule or capture.
+
+`--format json` / `jsonl` are the data formats. They don't collapse
+anything: every hit in every file version is a flat record with the usual
+finding/match fields (`file` is a plain path) plus `commit`, `commit_date`,
+`author`, `subject`, `blob` and `at_head`. Group or filter them however you
+like, e.g. with `jq`, or browse them as a sortable table with
+[VisiData](https://www.visidata.org/):
+
+```bash
+tree-police --git-history --grep '(?i)api[_-]?key' --format jsonl | vd -f jsonl
+```
+
 See [`AGENTS.md`](AGENTS.md) for the full agent-facing reference (adding a
 rule, adding a language, query-authoring gotchas).
 

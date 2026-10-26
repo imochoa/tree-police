@@ -840,6 +840,7 @@ dependencies = [
  "owo-colors",
  "predicates",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "streaming-iterator",
