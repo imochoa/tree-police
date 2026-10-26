@@ -21,6 +21,10 @@ use tree_police::scan::{self, ScanOptions};
 use tree_police::severity::Severity;
 use tree_police::tree_view;
 
+/// `skills/tree-sitter-queries/SKILL.md`, compiled in so `--skill` matches
+/// the installed binary's version.
+const SKILL: &str = include_str!("../skills/tree-sitter-queries/SKILL.md");
+
 /// Severity threshold that makes the process exit non-zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -75,6 +79,13 @@ struct Args {
     /// List the embedded rules (with severities) and exit.
     #[arg(long, conflicts_with_all = ["query", "query_file"])]
     list_rules: bool,
+
+    /// Print the bundled agent skill (an Agent Skills `SKILL.md` on writing
+    /// tree-sitter queries and rules with tree-police) and exit. Install it
+    /// with e.g. `mkdir -p ~/.claude/skills/tree-sitter-queries && tree-police
+    /// --skill > ~/.claude/skills/tree-sitter-queries/SKILL.md`.
+    #[arg(long, conflicts_with_all = ["query", "query_file", "list_rules", "show_tree", "test"])]
+    skill: bool,
 
     /// Print an indented AST for FILE and exit (language inferred from its
     /// extension, same registry as scanning). Useful for discovering node
@@ -175,6 +186,13 @@ fn run(args: Args) -> Result<i32> {
             .num_threads(threads)
             .build_global()
             .map_err(|err| anyhow!("could not configure thread pool: {err}"))?;
+    }
+
+    if args.skill {
+        let mut out = std::io::stdout();
+        out.write_all(SKILL.as_bytes())?;
+        out.flush().ok();
+        return Ok(0);
     }
 
     if let Some(path) = &args.show_tree {

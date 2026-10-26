@@ -703,3 +703,13 @@ fn fixture_tests_pass_fail_and_stay_out_of_normal_scans() {
             "foo.py:5: expected @no_foo to fire on the line above",
         ));
 }
+
+#[test]
+fn skill_prints_the_bundled_skill_md_verbatim() {
+    let expected = std::fs::read_to_string("skills/tree-sitter-queries/SKILL.md").unwrap();
+    tree_police()
+        .arg("--skill")
+        .assert()
+        .success()
+        .stdout(predicate::eq(expected));
+}

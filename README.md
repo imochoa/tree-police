@@ -293,7 +293,15 @@ An Agent Skills-compatible workflow for structural searches and rule authoring
 is also available at
 [`skills/tree-sitter-queries/SKILL.md`](skills/tree-sitter-queries/SKILL.md).
 Copy that directory into your agent's skill location, or point your harness at
-it directly. It defaults to tree-police's built-in tree viewer and ad-hoc query
+it directly. The binary also bundles it, so `tree-police --skill` prints the
+copy matching your installed version:
+
+```bash
+mkdir -p ~/.claude/skills/tree-sitter-queries
+tree-police --skill > ~/.claude/skills/tree-sitter-queries/SKILL.md
+```
+
+It defaults to tree-police's built-in tree viewer and ad-hoc query
 mode, then covers promoting a tested query into a reusable rule.
 
 ## Local development
