@@ -86,6 +86,11 @@
           # `just wheel` -- packages the binary as a Python wheel (pyproject.toml)
           pkgs.maturin
 
+          # `just lean` / `just lean-oracle` (formal/) and `just fuzz` (fuzz/).
+          # elan reads formal/lean-toolchain, same as CI's lean-action.
+          pkgs.elan
+          pkgs.cargo-fuzz
+
           # Pre-commit hooks (.pre-commit-config.yaml) run these via
           # `language: system`, i.e. straight off this devShell's PATH --
           # no separate per-hook environment to install.

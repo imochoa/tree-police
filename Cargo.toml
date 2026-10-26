@@ -122,6 +122,7 @@ globset = "0.4.20"
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+proptest = "1"
 tempfile = "3"
 
 [profile.release]
