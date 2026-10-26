@@ -911,3 +911,13 @@ fn git_history_outside_a_repo_is_an_internal_error() {
         .code(2)
         .stderr(predicate::str::contains("inside a git repository"));
 }
+
+#[test]
+fn skill_prints_the_bundled_skill_md_verbatim() {
+    let expected = std::fs::read_to_string("skills/tree-sitter-queries/SKILL.md").unwrap();
+    tree_police()
+        .arg("--skill")
+        .assert()
+        .success()
+        .stdout(predicate::eq(expected));
+}
