@@ -10,6 +10,7 @@ use std::path::Path;
 use anyhow::Result;
 use owo_colors::OwoColorize;
 
+use crate::history::{self, History, Hit, Occurrence, Reportable};
 use crate::rules::Ruleset;
 use crate::scan::{Finding, Match, ScanStats};
 use crate::severity::Severity;
@@ -299,6 +300,280 @@ fn render_matches_pretty(matches: &[Match], stats: &ScanStats, w: &mut impl Writ
         )?;
     }
     Ok(())
+}
+
+/// Render `--git-history` results. The human formats (`pretty`, `compact`,
+/// `summary`) collapse the same hit across file versions into one
+/// [`Occurrence`] row with when it first appeared, the newest version that
+/// still has it, and whether `HEAD` does. `json`/`jsonl` keep every hit,
+/// flat, with its commit's metadata alongside, for `jq` and friends.
+pub fn render_history<T: Reportable>(
+    format: Format,
+    history: &History,
+    hits: &[Hit<T>],
+    stats: &ScanStats,
+    w: &mut impl Write,
+) -> Result<()> {
+    let records = || hits.iter().map(|hit| HistoryRecord::new(history, hit));
+    match format {
+        Format::Json => {
+            serde_json::to_writer_pretty(&mut *w, &records().collect::<Vec<_>>())?;
+            writeln!(w)?;
+            Ok(())
+        }
+        Format::Jsonl => {
+            for record in records() {
+                serde_json::to_writer(&mut *w, &record)?;
+                writeln!(w)?;
+            }
+            Ok(())
+        }
+        Format::Pretty => {
+            let rows = history::occurrences(history, hits);
+            render_history_table(history, &rows, w)?;
+            render_history_summary(history, &rows, hits, stats, w)
+        }
+        Format::Compact => {
+            let rows = history::occurrences(history, hits);
+            for row in &rows {
+                let item = &row.first.item;
+                let (first, last) = (history.commit_of(row.first), history.commit_of(row.last));
+                writeln!(
+                    w,
+                    "{}:{}:{}: {} first={} {} last={} {} versions={} head={}",
+                    item.file().display(),
+                    item.line(),
+                    item.column(),
+                    label_cell(item.severity(), &severity_and_label(item)),
+                    first.short(),
+                    first.date,
+                    last.short(),
+                    last.date,
+                    row.versions,
+                    if row.at_head { "yes" } else { "no" },
+                )?;
+            }
+            render_history_summary(history, &rows, hits, stats, w)
+        }
+        Format::Summary => {
+            let rows = history::occurrences(history, hits);
+            render_history_counts(&rows, w)?;
+            render_history_summary(history, &rows, hits, stats, w)
+        }
+    }
+}
+
+/// One `--git-history` hit for `json`/`jsonl`: the finding or match itself
+/// (with `file` relative to the cwd), plus where in history it was found.
+#[derive(serde::Serialize)]
+struct HistoryRecord<'a, T> {
+    #[serde(flatten)]
+    item: &'a T,
+    /// Full id of the oldest commit containing this file version.
+    commit: &'a str,
+    commit_date: &'a str,
+    author: &'a str,
+    subject: &'a str,
+    /// Object id of the file version (`git cat-file -p <blob>` shows it).
+    blob: &'a str,
+    /// Whether `HEAD` still contains this exact file version.
+    at_head: bool,
+}
+
+impl<'a, T> HistoryRecord<'a, T> {
+    fn new(history: &'a History, hit: &'a Hit<T>) -> Self {
+        let blob = &history.blobs[hit.blob];
+        let commit = history.commit_of(hit);
+        Self {
+            item: &hit.item,
+            commit: &commit.id,
+            commit_date: &commit.date,
+            author: &commit.author,
+            subject: &commit.subject,
+            blob: &blob.id,
+            at_head: blob.at_head,
+        }
+    }
+}
+
+/// One table per file, columns aligned across all of them, each row
+/// followed by the matching source line (from the oldest version).
+fn render_history_table<T: Reportable>(
+    history: &History,
+    rows: &[Occurrence<T>],
+    w: &mut impl Write,
+) -> Result<()> {
+    const HEADERS: [&str; 8] = [
+        "LINE",
+        "MATCH",
+        "FIRST SEEN",
+        "AUTHOR",
+        "LAST SEEN",
+        "VERSIONS",
+        "IN HEAD",
+        "COMMIT",
+    ];
+    let cells: Vec<[String; 8]> = rows
+        .iter()
+        .map(|row| {
+            let item = &row.first.item;
+            let (first, last) = (history.commit_of(row.first), history.commit_of(row.last));
+            [
+                format!("{}:{}", item.line(), item.column()),
+                item.label(),
+                format!("{} {}", first.short(), first.date),
+                truncate(&first.author, 20),
+                format!("{} {}", last.short(), last.date),
+                row.versions.to_string(),
+                if row.at_head { "yes" } else { "no" }.to_string(),
+                truncate(&first.subject, 50),
+            ]
+        })
+        .collect();
+    let mut widths = HEADERS.map(|h| h.chars().count());
+    for row in &cells {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let pad = |text: &str, col: usize| format!("{text:<width$}", width = widths[col]);
+
+    let mut current: Option<&Path> = None;
+    for (row, cells) in rows.iter().zip(&cells) {
+        let item = &row.first.item;
+        if current != Some(item.file()) {
+            if current.is_some() {
+                writeln!(w)?;
+            }
+            writeln!(w, "{}", item.file().display().bold().underline())?;
+            let header: Vec<String> = HEADERS.iter().enumerate().map(|(i, h)| pad(h, i)).collect();
+            writeln!(w, "  {}", header.join("  ").trim_end().dimmed())?;
+            current = Some(item.file());
+        }
+        let line = [
+            pad(&cells[0], 0).dimmed().to_string(),
+            label_cell(item.severity(), &pad(&cells[1], 1)),
+            pad(&cells[2], 2),
+            pad(&cells[3], 3),
+            pad(&cells[4], 4),
+            format!("{:>width$}", cells[5], width = widths[5]),
+            if row.at_head {
+                pad(&cells[6], 6).bold().to_string()
+            } else {
+                pad(&cells[6], 6).dimmed().to_string()
+            },
+            cells[7].dimmed().to_string(),
+        ];
+        writeln!(w, "  {}", line.join("  "))?;
+        let indent = " ".repeat(widths[0]);
+        writeln!(w, "  {indent}  {} {}", "│".dimmed(), item.snippet().trim())?;
+    }
+    Ok(())
+}
+
+/// Distinct occurrences per rule/capture, most frequent first.
+fn render_history_counts<T: Reportable>(rows: &[Occurrence<T>], w: &mut impl Write) -> Result<()> {
+    struct Count<'a> {
+        label: String,
+        severity: Option<Severity>,
+        rows: usize,
+        files: HashSet<&'a Path>,
+        at_head: usize,
+    }
+    let mut counts: Vec<Count> = Vec::new();
+    for row in rows {
+        let item = &row.first.item;
+        let label = item.label();
+        let count = match counts.iter().position(|c| c.label == label) {
+            Some(i) => &mut counts[i],
+            None => {
+                counts.push(Count {
+                    label,
+                    severity: item.severity(),
+                    rows: 0,
+                    files: HashSet::new(),
+                    at_head: 0,
+                });
+                counts.last_mut().expect("just pushed")
+            }
+        };
+        count.rows += 1;
+        count.files.insert(item.file());
+        count.at_head += usize::from(row.at_head);
+    }
+    counts.sort_by(|a, b| b.rows.cmp(&a.rows).then_with(|| a.label.cmp(&b.label)));
+    writeln!(
+        w,
+        "{}",
+        format!("{:>8}  {:>6}  {:>7}  MATCH", "DISTINCT", "FILES", "IN HEAD").dimmed()
+    )?;
+    for c in &counts {
+        writeln!(
+            w,
+            "{:>8}  {:>6}  {:>7}  {}",
+            c.rows,
+            c.files.len(),
+            c.at_head,
+            label_cell(c.severity, &c.label),
+        )?;
+    }
+    Ok(())
+}
+
+fn render_history_summary<T: Reportable>(
+    history: &History,
+    rows: &[Occurrence<T>],
+    hits: &[Hit<T>],
+    stats: &ScanStats,
+    w: &mut impl Write,
+) -> Result<()> {
+    writeln!(w)?;
+    let scanned = format!(
+        "{} file version(s) introduced by {} commit(s)",
+        stats.files_scanned,
+        history.commits.len()
+    );
+    if rows.is_empty() {
+        writeln!(w, "{}", format!("No matches. Scanned {scanned}.").green())?;
+        return Ok(());
+    }
+    let files: HashSet<&Path> = rows.iter().map(|r| r.first.item.file()).collect();
+    let at_head = rows.iter().filter(|r| r.at_head).count();
+    writeln!(
+        w,
+        "{} {} distinct match(es) in {} file(s), {} still in HEAD. {} hit(s) across {} file version(s) (scanned {scanned}).",
+        "Summary:".bold(),
+        rows.len().to_string().bold(),
+        files.len(),
+        at_head.to_string().bold(),
+        hits.len(),
+        stats.files_with_findings,
+    )?;
+    Ok(())
+}
+
+fn severity_and_label<T: Reportable>(item: &T) -> String {
+    match item.severity() {
+        Some(severity) => format!("{} {}", severity.as_str(), item.label()),
+        None => item.label(),
+    }
+}
+
+/// `text` colored by a finding's severity, or bold for an ad-hoc match.
+fn label_cell(severity: Option<Severity>, text: &str) -> String {
+    match severity {
+        Some(severity) => colorize(severity, text),
+        None => text.bold().to_string(),
+    }
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        let cut: String = text.chars().take(max - 1).collect();
+        format!("{cut}…")
+    }
 }
 
 /// One rule in the embedded catalog, flattened for export.
