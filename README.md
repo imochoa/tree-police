@@ -405,7 +405,7 @@ later removed. It scans all refs by default; to narrow it, pass revisions
 (space-separated, anything `git log` takes), e.g. `--git-history main` or
 `--git-history 'v0.2.0..HEAD'`. `paths` become git pathspecs.
 
-Each distinct file version (blob) is read and parsed exactly once, however
+Each distinct file version (blob) is read and parsed once per path, however
 many commits contain it. It needs `git` on `PATH` and must run inside the
 repository. Config scoping and suppression comments still apply. Baselines
 don't, since they record working-tree paths.

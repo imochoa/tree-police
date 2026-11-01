@@ -1,9 +1,12 @@
 //! `--git-history`: run a scan over every file version in a git
 //! repository's history rather than the working tree.
 //!
-//! Each distinct blob is read and parsed exactly once, however many commits
-//! contain it, and is attributed to the oldest commit that introduced it. A
-//! file that never changed across 10k commits costs one parse, not 10k. The
+//! Each distinct blob is read and parsed exactly once per path, however many
+//! commits contain it, and is attributed to the oldest commit that introduced
+//! it there. A file that never changed across 10k commits costs one parse, not
+//! 10k. Identical content at another path is scanned again: the path decides
+//! the language and the config scoping, so the first path's verdict can't be
+//! reused (a `.txt` copy would otherwise hide the same content as `.py`). The
 //! human-facing report then collapses the same hit across file versions into
 //! one [`Occurrence`] (see `report::render_history`).
 //! Everything goes through the `git` binary (`git log --raw` to list the
@@ -271,7 +274,9 @@ impl History {
             };
             // Regular files only: deletions (mode 000000), symlinks (120000)
             // and submodule commits (160000) have no source to scan.
-            if !matches!(new_mode, "100644" | "100755") || !seen.insert(new_id.to_string()) {
+            if !matches!(new_mode, "100644" | "100755")
+                || !seen.insert((new_id.to_string(), path.to_vec()))
+            {
                 continue;
             }
             if let Some(commit) = pending.take() {

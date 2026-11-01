@@ -883,6 +883,26 @@ fn git_history_runs_the_ruleset_once_per_distinct_blob() {
 }
 
 #[test]
+fn git_history_scans_identical_content_again_under_a_new_path() {
+    // The same bytes first committed as a .txt (no grammar), then copied to
+    // a .py: the .py copy must still be scanned.
+    let repo = temp_repo(&[("snippet.txt", "print(\"debug\")\n")]);
+    let dir = repo.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "one"]);
+    std::fs::copy(dir.join("snippet.txt"), dir.join("tool.py")).unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "two"]);
+
+    let text = history_output(&repo, &["--format", "compact"]);
+    assert!(
+        text.contains("tool.py:1:1: warning forbidden_print first="),
+        "{text}"
+    );
+}
+
+#[test]
 fn git_history_query_reports_the_introducing_commit() {
     let repo = history_repo();
     let first = first_commit(&repo);
