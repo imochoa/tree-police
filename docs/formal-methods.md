@@ -171,7 +171,85 @@ comment becomes a bare `ignore` and suppresses **every** rule on that line.
 
 This is spec-first development in miniature, and a good task to hand to an
 LLM: the theorem defines "done", the kernel checks the proof, and the
-differential test checks the Rust.
+differential test checks the Rust. Watch for spec gaming, though (see the
+next section): the cheapest way to prove "never `selectors := none`" is a
+parser that rejects every directive.
+
+## Lessons from Anthropic's formal-verification work
+
+[Anthropic's write-up](https://www.anthropic.com/research/formal-verification)
+describes Claude turning existing OSS-Fuzz harnesses into specs ("this entry
+point never crashes on any input below a size limit") and proving them on the
+compiled binaries, across more than a hundred libraries. Several of its
+lessons map directly onto this repo.
+
+1. **A fuzz target is a spec nobody has proved yet.** They went from tests
+   to specs to proofs, not from a textbook to proofs. `fuzz/fuzz_targets/parse_directive.rs`
+   already states a spec: no panic, and no blank selectors. Fuzzing samples
+   inputs; a proof covers all of them, including inputs too large or too
+   unlikely for a fuzzer to try.
+
+   *Exercise:* turn that target into a [Kani](https://model-checking.github.io/kani/)
+   proof, which checks the Rust itself for every input up to a bound:
+
+   ```rust
+   #[cfg(kani)]
+   #[kani::proof]
+   #[kani::unwind(10)]
+   fn parse_directive_never_panics() {
+       let bytes: [u8; 8] = kani::any();
+       if let Ok(text) = std::str::from_utf8(&bytes) {
+           if let Some(Ok(d)) = parse_directive(text) {
+               for item in d.selectors.unwrap_or_default() {
+                   assert!(!item.trim().is_empty());
+               }
+           }
+       }
+   }
+   ```
+
+   Raise the array size and see how proof time grows. That is the cost the
+   article pays in tokens and compute at much larger scale.
+
+2. **Prove the real thing, or test the gap.** They proved properties of the
+   binary itself so they didn't have to trust a hand-written model. This repo
+   proves things about a Lean model and relies on `tests/lean_oracle.rs` to
+   tie it to the Rust. The Phase 3 whitespace bug is exactly the
+   model-vs-reality mismatch the article warns about. Kani (above) and Aeneas
+   (below) close that gap from the other side.
+
+3. **Spec gaming.** An agent asked to prove "never crashes" can make it true
+   by changing the program to reject everything. The article's answer: log
+   every patch an agent makes, review it, and reward proving *which* inputs
+   it changes and how few. Here, `tests/cli.rs`, the query cases and the
+   differential test are the patch audit: a gamed fix breaks behaviour they
+   pin. When an LLM does Phase 5, read its diff to `src/` and `Suppress.lean`
+   before reading the proof.
+
+4. **Specs catch logic bugs, not just crashes.** One of their finds was an
+   access restriction that silently wasn't enforced, with no crash to flag
+   it. `ignore [x]` widening to every rule is the same kind of bug: no fuzzer
+   reports it, because nothing panics. Only a statement of intent does.
+
+5. **Write down what you trust.** A proof is only as good as its trusted
+   base. They list the proof checker, the CPU and OS semantics, the compiler
+   and the hardware. For this repo:
+
+   | Trusted | What goes wrong if it's wrong |
+   | --- | --- |
+   | Lean kernel | A false theorem is accepted (very unlikely) |
+   | The model in `Suppress.lean` | Proofs hold for code that isn't what ships |
+   | `Oracle.lean` and the JSON shape in `tests/lean_oracle.rs` | The differential test compares the wrong things and passes |
+   | The proptest generators | Real mismatches are never generated |
+   | `native_decide`, if you use it | Trusts the compiler, not just the kernel (the repo uses `rfl`) |
+
+   *Exercise:* add `#print axioms TreePolice.Suppress.apply_idem` to a scratch
+   file. Anything besides `propext`, `Classical.choice` and `Quot.sound`
+   (for example `sorryAx` or `Lean.ofReduceBool`) widens the trusted base.
+
+6. **"Verified" isn't "bug-free".** The article says so plainly: proofs
+   cover the entry points and assumptions they name, nothing else. Keep the
+   fuzzing and property tests running alongside the proofs.
 
 ## Phase 6: going further
 
