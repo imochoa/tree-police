@@ -129,7 +129,7 @@ for the embedded ruleset, or check your own `.tree-police/*.scm` files'
   the working directory; nothing to configure. To try a local image instead
   of the published one, override `entry:` with an image you've built
   yourself (`just docker-build` in this repo).
-- **Exit code 1 but no findings printed** — check `--min-severity`; findings
-  below it are silently dropped from output but can still factor into
-  `--fail-on` if you've also loosened that (unusual combination, but worth
-  checking if the two seem inconsistent).
+- **The hook passes despite findings at the `--fail-on` level** — check
+  `--min-severity`, `--rule` and `--category`: findings they filter out are
+  dropped before `--fail-on` is checked, so they never fail the hook (e.g.
+  `--min-severity error --fail-on warning` never fails on a warning).

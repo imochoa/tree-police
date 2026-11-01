@@ -338,7 +338,7 @@ just docker-build                 # nix build .#tree-police-static, then podman 
 just docker-run .                 # run the built image against a mounted dir
 ```
 
-Key flags: `--format pretty|json|jsonl`, `--min-severity log|warning|error`,
+Key flags: `--format pretty|json|jsonl|compact|summary`, `--min-severity log|warning|error`,
 `--rule <id>` / `--category <name>` (repeatable, scope to specific
 rules/categories — see `--list-rules` for valid values), `--rules-dir <dir>`
 (default `.tree-police`), `--fail-on none|log|warning|error` (exit-code
