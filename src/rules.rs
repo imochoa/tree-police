@@ -223,7 +223,9 @@ fn compile_for_label(
     check_top_level_predicates(source).with_context(|| format!("invalid query {label}"))?;
     let query = Query::new(&spec.language(), source)
         .with_context(|| format!("failed to compile query {label}"))?;
-    Ok((spec, compile(label.to_string(), source, query, embedded)))
+    let compiled = compile(label.to_string(), source, query, embedded)
+        .with_context(|| format!("invalid query {label}"))?;
+    Ok((spec, compiled))
 }
 
 /// Reject a predicate written at the top level of a query, outside any
@@ -275,7 +277,12 @@ pub fn check_top_level_predicates(source: &str) -> Result<()> {
     Ok(())
 }
 
-fn compile(source_path: String, source: &str, query: Query, embedded: bool) -> CompiledQuery {
+fn compile(
+    source_path: String,
+    source: &str,
+    query: Query,
+    embedded: bool,
+) -> Result<CompiledQuery> {
     let capture_names: Vec<String> = query
         .capture_names()
         .iter()
@@ -291,12 +298,22 @@ fn compile(source_path: String, source: &str, query: Query, embedded: bool) -> C
         let mut category = None;
         for prop in query.property_settings(i) {
             match &*prop.key {
+                // A typo must fail loudly: silently falling back to the
+                // default would turn an intended `error` into a `warning`
+                // that no longer blocks `--fail-on error`.
                 "severity" => {
-                    if let Some(v) = prop.value.as_deref() {
-                        if let Ok(parsed) = v.parse::<Severity>() {
-                            severity = parsed;
-                        }
-                    }
+                    let line = source[..query.start_byte_for_pattern(i)]
+                        .matches('\n')
+                        .count()
+                        + 1;
+                    let value = prop.value.as_deref().ok_or_else(|| {
+                        anyhow!(
+                            "line {line}: `#set! severity` needs a value (log, warning or error)"
+                        )
+                    })?;
+                    severity = value
+                        .parse::<Severity>()
+                        .map_err(|err| anyhow!("line {line}: {err}"))?;
                 }
                 "description" => description = prop.value.as_deref().map(str::to_string),
                 "category" => category = prop.value.as_deref().map(str::to_string),
@@ -324,14 +341,14 @@ fn compile(source_path: String, source: &str, query: Query, embedded: bool) -> C
         });
     }
 
-    CompiledQuery {
+    Ok(CompiledQuery {
         source_path,
         embedded,
         query,
         patterns,
         helper_captures,
         capture_names,
-    }
+    })
 }
 
 /// Find the last non-helper `@capture` name in a pattern's source slice.
@@ -417,6 +434,27 @@ mod tests {
             "(block (body (attribute (identifier) @_a (#eq? @_a \"x\")))) @rule",
         ] {
             check_top_level_predicates(good).unwrap_or_else(|e| panic!("{good}: {e}"));
+        }
+    }
+
+    #[test]
+    fn invalid_severity_is_rejected() {
+        let good = "((identifier) @x (#set! severity \"error\"))";
+        let (_, cq) = compile_for_label("t-py.scm", good, false).unwrap();
+        assert_eq!(cq.pattern_meta(0).severity, Severity::Error);
+
+        for bad in [
+            "((identifier) @x (#set! severity \"eror\"))",
+            "((identifier) @x (#set! severity))",
+        ] {
+            let err = match compile_for_label("t-py.scm", bad, false) {
+                Ok(_) => panic!("accepted: {bad}"),
+                Err(err) => format!("{err:#}"),
+            };
+            assert!(
+                err.contains("t-py.scm") && err.contains("line 1"),
+                "{bad}: {err}"
+            );
         }
     }
 
