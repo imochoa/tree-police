@@ -78,10 +78,12 @@ jobs:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
+      # --target: the prebuilt cargo-fuzz is a musl binary and defaults to
+      # building for its own target, whose std isn't installed here.
       - name: Fuzz
         working-directory: fuzz
         run: >
-          cargo fuzz run -s none ${{ matrix.target }} --
+          cargo fuzz run -s none --target x86_64-unknown-linux-gnu ${{ matrix.target }} --
           -max_total_time=${{ github.event_name == 'schedule' && '900' || inputs.fuzz_seconds || '60' }}
       - if: failure()
         uses: actions/upload-artifact@v4
