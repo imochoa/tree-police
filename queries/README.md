@@ -48,7 +48,8 @@ top-level README's "Repo-local rules" section.
   predicate (`@_block_type`, `@_attr`, `@_bucket_name`, …) must be prefixed with
   `_`. `tree-police` never reports helper captures.
 - **Declare severity per pattern** with a `(#set! severity "error|warning|log")`
-  directive; omitting it defaults to `warning`.
+  directive; omitting it defaults to `warning`, and an unrecognized value is a
+  load error.
 - **Optionally add `(#set! category "…")`** — a free-form grouping tag
   (`"security"`, `"naming"`, …). This is what organizes `--list-rules`
   output within a language's rule file(s).
