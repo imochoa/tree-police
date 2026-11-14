@@ -724,6 +724,23 @@ fn grep_searches_any_text_file_without_a_grammar() {
 }
 
 #[test]
+fn unknown_rule_or_category_filter_is_an_error() {
+    tree_police()
+        .args(["--rule", "forbidden_prnt", PY_VIOLATIONS])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "--rule: unknown rule ID \"forbidden_prnt\"",
+        ));
+    tree_police()
+        .args(["--category", "securty", PY_VIOLATIONS])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--category: unknown category"))
+        .stderr(predicate::str::contains("securty"));
+}
+
+#[test]
 fn missing_path_is_an_error_not_an_empty_scan() {
     tree_police()
         .args(["--format", "compact", PY_CLEAN, "no/such/dir"])

@@ -16,7 +16,7 @@ use tree_sitter::{Parser as TsParser, Query};
 
 use tree_police::baseline::Baseline;
 use tree_police::casetest;
-use tree_police::config::{Catalog, Config};
+use tree_police::config::{Catalog, Config, Selector};
 use tree_police::history::History;
 use tree_police::registry;
 use tree_police::report::{self, Format};
@@ -338,6 +338,17 @@ fn run(args: Args) -> Result<i32> {
         skip_dirs: vec![std::path::absolute(args.rules_dir.join("tests"))?],
     };
     let catalog = Catalog::from_ruleset(&ruleset);
+    // A typo here would filter out every finding and pass silently.
+    for rule in &args.rules {
+        catalog
+            .check(&Selector::Rule(rule.clone()))
+            .context("--rule")?;
+    }
+    for category in &args.categories {
+        catalog
+            .check(&Selector::Category(category.clone()))
+            .context("--category")?;
+    }
     let config = match &args.config {
         Some(path) => Config::load_explicit(path, &catalog)?,
         None => Config::load_default(&args.rules_dir, &catalog)?,
