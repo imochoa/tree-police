@@ -1005,6 +1005,32 @@ fn git_history_query_reports_the_introducing_commit() {
 }
 
 #[test]
+fn running_from_a_subdirectory_warns_about_the_repo_rules_dir() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "disable = [\"forbidden_print\"]\n",
+        ),
+        ("sub/a.py", "x = 1\n"),
+    ]);
+    git(repo.path(), &["init", "-q"]);
+    tree_police()
+        .current_dir(repo.path().join("sub"))
+        .arg(".")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--rules-dir"))
+        .stderr(predicate::str::contains(".tree-police"));
+    // From the root it is found, so no warning.
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn git_history_revision_is_never_parsed_as_a_git_option() {
     let repo = history_repo();
     let out = repo.path().join("written-by-git.txt");

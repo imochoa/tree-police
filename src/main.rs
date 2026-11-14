@@ -318,6 +318,7 @@ fn run(args: Args) -> Result<i32> {
         );
     }
 
+    warn_if_rules_dir_is_at_repo_root(&args.rules_dir);
     let ruleset = rules::load_with_extra(Some(&args.rules_dir))?;
     let mut out = anstream::stdout();
 
@@ -406,6 +407,28 @@ fn run(args: Args) -> Result<i32> {
         return Ok(2);
     }
     Ok(exit_code(args.fail_on, &findings))
+}
+
+/// The default `--rules-dir` is relative to the cwd, so a run from a
+/// subdirectory skips the repo's `.tree-police/`. Point that out.
+fn warn_if_rules_dir_is_at_repo_root(rules_dir: &Path) {
+    if rules_dir != Path::new(".tree-police") || rules_dir.exists() {
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let Some(top) = cwd.ancestors().find(|dir| dir.join(".git").exists()) else {
+        return;
+    };
+    let found = top.join(".tree-police");
+    if top != cwd && found.is_dir() {
+        tracing::warn!(
+            "no .tree-police/ in the current directory, so {} is not used; pass `--rules-dir {}` to use it",
+            found.display(),
+            found.display()
+        );
+    }
 }
 
 /// Fail on a path argument that doesn't exist: it is almost always a typo,

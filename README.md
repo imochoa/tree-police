@@ -126,7 +126,9 @@ with the built-in ruleset automatically — no fork, no image rebuild:
 ```
 
 Override the lookup path with `--rules-dir <dir>` if you'd rather keep it
-somewhere else.
+somewhere else. The default is relative to the current directory: run from a
+subdirectory, `tree-police` warns when the repo root has a `.tree-police/` it
+is not using.
 
 A repo-local rule with the same ID as a built-in one replaces it: the built-in
 version stops running, so you can tighten or loosen a built-in rule without
