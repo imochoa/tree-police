@@ -1005,6 +1005,20 @@ fn git_history_query_reports_the_introducing_commit() {
 }
 
 #[test]
+fn git_history_revision_is_never_parsed_as_a_git_option() {
+    let repo = history_repo();
+    let out = repo.path().join("written-by-git.txt");
+    tree_police()
+        .current_dir(repo.path())
+        .arg(format!("--git-history=--output={}", out.display()))
+        .args(["--grep", "x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("bad revision '--output="));
+    assert!(!out.exists(), "git treated the revision as --output");
+}
+
+#[test]
 fn git_history_outside_a_repo_is_an_internal_error() {
     let dir = tempfile::tempdir().unwrap();
     tree_police()
