@@ -425,6 +425,25 @@ fn config_globs_are_relative_to_repo_root_not_cwd() {
 }
 
 #[test]
+fn config_globs_see_through_dot_dot_in_scanned_paths() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "exclude = [\"vendor/\"]\n\n[[scope]]\nrules = [\"forbidden_print\"]\npaths = [\"src/**\"]\n",
+        ),
+        ("src/a.py", "x = 1\n"),
+        ("vendor/v.py", "print(1)\n"),
+        ("lib/b.py", "print(1)\n"),
+    ]);
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--format", "compact", "src/../vendor", "src/../lib"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Scanned 1 file(s)"));
+}
+
+#[test]
 fn config_with_unknown_rule_is_an_internal_error() {
     let repo = temp_repo(&[
         (

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::config::absolute_normalized;
 use crate::scan::Finding;
 
 const VERSION: u32 = 1;
@@ -144,7 +145,7 @@ impl Baseline {
     /// Root-relative path with `/` separators; files outside the root keep
     /// their absolute path.
     fn rel(&self, path: &Path) -> String {
-        let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let abs = absolute_normalized(path).unwrap_or_else(|_| path.to_path_buf());
         let rel = abs.strip_prefix(&self.root).unwrap_or(&abs);
         rel.components()
             .map(|c| c.as_os_str().to_string_lossy())
@@ -213,5 +214,14 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"file\": \"a.py\""), "{text}");
         assert!(!text.contains("b.py"), "{text}");
+    }
+
+    #[test]
+    fn keys_resolve_dot_dot_components() {
+        let root = PathBuf::from("/repo");
+        let baseline = Baseline::empty(root.join("baseline.json"), root);
+        assert_eq!(baseline.rel(Path::new("/repo/src/a.py")), "src/a.py");
+        assert_eq!(baseline.rel(Path::new("/repo/lib/../src/a.py")), "src/a.py");
+        assert_eq!(baseline.rel(Path::new("/repo/./src/a.py")), "src/a.py");
     }
 }
