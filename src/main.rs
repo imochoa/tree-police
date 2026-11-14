@@ -276,6 +276,10 @@ fn run(args: Args) -> Result<i32> {
         hidden: args.hidden,
         skip_dirs: Vec::new(),
     };
+    // `--git-history` takes pathspecs, which needn't exist in the work tree.
+    if history.is_none() && !args.list_rules && args.test.is_none() {
+        check_paths_exist(&args.paths)?;
+    }
 
     if let Some(pattern) = &args.grep {
         let regex =
@@ -360,6 +364,10 @@ fn run(args: Args) -> Result<i32> {
     let (mut findings, mut stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
 
     if args.update_baseline {
+        // An unreadable file would look clean and lose its baseline entries.
+        if report_scan_errors(&stats.errors) {
+            return Err(anyhow!("baseline not updated"));
+        }
         let (path, root) = baseline_location(&args)?;
         let existing = if path.is_file() {
             Baseline::load(path, root)?
@@ -383,7 +391,35 @@ fn run(args: Args) -> Result<i32> {
 
     report::render(args.format, &findings, &stats, &mut out)?;
     out.flush().ok();
+    if report_scan_errors(&stats.errors) {
+        return Ok(2);
+    }
     Ok(exit_code(args.fail_on, &findings))
+}
+
+/// Fail on a path argument that doesn't exist: it is almost always a typo,
+/// and scanning nothing would pass a CI gate silently.
+fn check_paths_exist(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        path.symlink_metadata()
+            .with_context(|| format!("cannot scan {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Log every path the scan could not walk or read. Returns whether there
+/// were any, in which case the results are incomplete and the run fails.
+fn report_scan_errors(errors: &[String]) -> bool {
+    for err in errors {
+        tracing::error!("{err}");
+    }
+    if !errors.is_empty() {
+        tracing::error!(
+            "could not scan {} path(s); the results are incomplete",
+            errors.len()
+        );
+    }
+    !errors.is_empty()
 }
 
 /// 1 if any finding is at or above `--fail-on`, else 0.

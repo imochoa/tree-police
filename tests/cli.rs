@@ -723,6 +723,53 @@ fn grep_searches_any_text_file_without_a_grammar() {
         .stdout(predicate::str::contains("blob.bin").not());
 }
 
+#[test]
+fn missing_path_is_an_error_not_an_empty_scan() {
+    tree_police()
+        .args(["--format", "compact", PY_CLEAN, "no/such/dir"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot scan no/such/dir"));
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_paths_fail_the_scan_after_reporting_other_findings() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = temp_repo(&[
+        ("a.py", "print(1)\n"),
+        ("b.py", "print(2)\n"),
+        ("sub/c.py", "print(3)\n"),
+    ]);
+    let mode = |path: &str, mode| {
+        let path = repo.path().join(path);
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    mode("b.py", 0o000);
+    mode("sub", 0o000);
+    if std::fs::read(repo.path().join("b.py")).is_ok() {
+        // Running as root: permissions aren't enforced.
+        mode("sub", 0o755);
+        return;
+    }
+    let output = tree_police()
+        .current_dir(repo.path())
+        .args(["--format", "compact", "."])
+        .output()
+        .unwrap();
+    mode("sub", 0o755);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("a.py:1:1: warning forbidden_print"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("b.py"), "{stderr}");
+    assert!(stderr.contains("sub"), "{stderr}");
+    assert!(stderr.contains("could not scan 2 path(s)"), "{stderr}");
+}
+
 fn git(dir: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .current_dir(dir)

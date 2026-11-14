@@ -346,7 +346,8 @@ threshold, default `warning`), `--show-tree <file>` (print an indented AST
 instead of scanning — see [`docs/writing-queries.md`](docs/writing-queries.md)),
 `--no-ignore`, `--hidden`, `-j/--threads`, `-v/-vv`. Exit codes: `0` = no
 findings at/above `--fail-on`, `1` = findings at/above the threshold, `2` =
-error.
+error, including a path argument that doesn't exist or a file or directory
+that can't be read (the other files are still scanned and reported first).
 
 ### Ad-hoc queries
 
