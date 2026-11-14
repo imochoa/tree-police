@@ -238,7 +238,8 @@ impl History {
         if revs.is_empty() {
             cmd.arg("--all");
         } else {
-            cmd.args(revs);
+            // Revisions are user input: never let one parse as an option.
+            cmd.arg("--end-of-options").args(revs);
         }
         cmd.arg("--").args(pathspecs);
         let raw = run(&mut cmd)?;

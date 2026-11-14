@@ -71,6 +71,9 @@ pub struct ScanStats {
     pub baselined: usize,
     /// Every file that was scanned (after `exclude`), for baseline updates.
     pub files: Vec<PathBuf>,
+    /// Paths that could not be walked or read, one message each. A scan
+    /// with any of these is incomplete, so the CLI fails it.
+    pub errors: Vec<String>,
 }
 
 /// Filesystem-walk options.
@@ -119,11 +122,11 @@ pub fn scan(
         return Ok((Vec::new(), ScanStats::default()));
     }
 
-    let mut files = collect_files(paths, ruleset, opts);
+    let (mut files, mut errors) = collect_files(paths, ruleset, opts);
     files.retain(|path| !config.excludes(path) && !opts.skips(path));
     let catalog = Catalog::from_ruleset(ruleset);
 
-    let per_file: Vec<(Vec<Finding>, usize)> = files
+    let per_file: Vec<std::io::Result<(Vec<Finding>, usize)>> = files
         .par_iter()
         .map_init(Parser::new, |parser, path| {
             scan_file(parser, path, ruleset, config, &catalog)
@@ -133,7 +136,14 @@ pub fn scan(
     let mut findings = Vec::new();
     let mut files_with_findings = 0;
     let mut suppressed = 0;
-    for (file_findings, file_suppressed) in per_file {
+    for (path, result) in files.iter().zip(per_file) {
+        let (file_findings, file_suppressed) = match result {
+            Ok(r) => r,
+            Err(err) => {
+                errors.push(format!("{}: {err}", path.display()));
+                continue;
+            }
+        };
         suppressed += file_suppressed;
         if !file_findings.is_empty() {
             files_with_findings += 1;
@@ -155,6 +165,7 @@ pub fn scan(
         suppressed,
         baselined: 0,
         files,
+        errors,
     };
     Ok((findings, stats))
 }
@@ -182,14 +193,21 @@ fn build_walker(paths: &[PathBuf], opts: &ScanOptions) -> WalkBuilder {
     builder
 }
 
-fn collect_files(paths: &[PathBuf], ruleset: &Ruleset, opts: &ScanOptions) -> Vec<PathBuf> {
+/// Files to scan under `paths`, plus a message for every walk error (an
+/// unreadable directory, a path that vanished mid-walk).
+fn collect_files(
+    paths: &[PathBuf],
+    ruleset: &Ruleset,
+    opts: &ScanOptions,
+) -> (Vec<PathBuf>, Vec<String>) {
     let builder = build_walker(paths, opts);
     let mut files = Vec::new();
+    let mut errors = Vec::new();
     for result in builder.build() {
         let entry = match result {
             Ok(entry) => entry,
             Err(err) => {
-                tracing::warn!("walk error: {err}");
+                errors.push(err.to_string());
                 continue;
             }
         };
@@ -206,7 +224,7 @@ fn collect_files(paths: &[PathBuf], ruleset: &Ruleset, opts: &ScanOptions) -> Ve
             }
         }
     }
-    files
+    (files, errors)
 }
 
 /// Like `collect_files`, but for one specific language rather than a
@@ -466,31 +484,28 @@ pub(crate) fn grep_source(path: &Path, source: &[u8], regex: &Regex) -> Vec<Matc
 }
 
 /// Findings for one file after config scoping and suppressions, plus how
-/// many findings suppression comments dropped.
+/// many findings suppression comments dropped. `Err` if it can't be read.
 fn scan_file(
     parser: &mut Parser,
     path: &Path,
     ruleset: &Ruleset,
     config: &Config,
     catalog: &Catalog,
-) -> (Vec<Finding>, usize) {
+) -> std::io::Result<(Vec<Finding>, usize)> {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return (Vec::new(), 0);
+        return Ok((Vec::new(), 0));
     };
     let Some(spec) = registry::for_extension(ext) else {
-        return (Vec::new(), 0);
+        return Ok((Vec::new(), 0));
     };
     if ruleset.language(spec.name).is_none() {
-        return (Vec::new(), 0);
+        return Ok((Vec::new(), 0));
     }
 
-    match fs::read(path) {
-        Ok(source) => scan_source(parser, path, spec, &source, ruleset, config, catalog),
-        Err(err) => {
-            tracing::warn!("skipping {}: {err}", path.display());
-            (Vec::new(), 0)
-        }
-    }
+    let source = fs::read(path)?;
+    Ok(scan_source(
+        parser, path, spec, &source, ruleset, config, catalog,
+    ))
 }
 
 /// [`scan_file`] on bytes already in memory, for a language already

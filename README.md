@@ -126,7 +126,9 @@ with the built-in ruleset automatically — no fork, no image rebuild:
 ```
 
 Override the lookup path with `--rules-dir <dir>` if you'd rather keep it
-somewhere else.
+somewhere else. The default is relative to the current directory: run from a
+subdirectory, `tree-police` warns when the repo root has a `.tree-police/` it
+is not using.
 
 A repo-local rule with the same ID as a built-in one replaces it: the built-in
 version stops running, so you can tighten or loosen a built-in rule without
@@ -340,13 +342,15 @@ just docker-run .                 # run the built image against a mounted dir
 
 Key flags: `--format pretty|json|jsonl|compact|summary`, `--min-severity log|warning|error`,
 `--rule <id>` / `--category <name>` (repeatable, scope to specific
-rules/categories — see `--list-rules` for valid values), `--rules-dir <dir>`
+rules/categories — see `--list-rules` for valid values; an unknown one is an
+error), `--rules-dir <dir>`
 (default `.tree-police`), `--fail-on none|log|warning|error` (exit-code
 threshold, default `warning`), `--show-tree <file>` (print an indented AST
 instead of scanning — see [`docs/writing-queries.md`](docs/writing-queries.md)),
 `--no-ignore`, `--hidden`, `-j/--threads`, `-v/-vv`. Exit codes: `0` = no
 findings at/above `--fail-on`, `1` = findings at/above the threshold, `2` =
-error.
+error, including a path argument that doesn't exist or a file or directory
+that can't be read (the other files are still scanned and reported first).
 
 ### Ad-hoc queries
 

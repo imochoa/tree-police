@@ -16,7 +16,7 @@ use tree_sitter::{Parser as TsParser, Query};
 
 use tree_police::baseline::Baseline;
 use tree_police::casetest;
-use tree_police::config::{Catalog, Config};
+use tree_police::config::{Catalog, Config, Selector};
 use tree_police::history::History;
 use tree_police::registry;
 use tree_police::report::{self, Format};
@@ -276,6 +276,10 @@ fn run(args: Args) -> Result<i32> {
         hidden: args.hidden,
         skip_dirs: Vec::new(),
     };
+    // `--git-history` takes pathspecs, which needn't exist in the work tree.
+    if history.is_none() && !args.list_rules && args.test.is_none() {
+        check_paths_exist(&args.paths)?;
+    }
 
     if let Some(pattern) = &args.grep {
         let regex =
@@ -314,6 +318,7 @@ fn run(args: Args) -> Result<i32> {
         );
     }
 
+    warn_if_rules_dir_is_at_repo_root(&args.rules_dir);
     let ruleset = rules::load_with_extra(Some(&args.rules_dir))?;
     let mut out = anstream::stdout();
 
@@ -334,6 +339,17 @@ fn run(args: Args) -> Result<i32> {
         skip_dirs: vec![std::path::absolute(args.rules_dir.join("tests"))?],
     };
     let catalog = Catalog::from_ruleset(&ruleset);
+    // A typo here would filter out every finding and pass silently.
+    for rule in &args.rules {
+        catalog
+            .check(&Selector::Rule(rule.clone()))
+            .context("--rule")?;
+    }
+    for category in &args.categories {
+        catalog
+            .check(&Selector::Category(category.clone()))
+            .context("--category")?;
+    }
     let config = match &args.config {
         Some(path) => Config::load_explicit(path, &catalog)?,
         None => Config::load_default(&args.rules_dir, &catalog)?,
@@ -360,6 +376,10 @@ fn run(args: Args) -> Result<i32> {
     let (mut findings, mut stats) = scan::scan(&args.paths, &ruleset, &config, &opts)?;
 
     if args.update_baseline {
+        // An unreadable file would look clean and lose its baseline entries.
+        if report_scan_errors(&stats.errors) {
+            return Err(anyhow!("baseline not updated"));
+        }
         let (path, root) = baseline_location(&args)?;
         let existing = if path.is_file() {
             Baseline::load(path, root)?
@@ -383,7 +403,57 @@ fn run(args: Args) -> Result<i32> {
 
     report::render(args.format, &findings, &stats, &mut out)?;
     out.flush().ok();
+    if report_scan_errors(&stats.errors) {
+        return Ok(2);
+    }
     Ok(exit_code(args.fail_on, &findings))
+}
+
+/// The default `--rules-dir` is relative to the cwd, so a run from a
+/// subdirectory skips the repo's `.tree-police/`. Point that out.
+fn warn_if_rules_dir_is_at_repo_root(rules_dir: &Path) {
+    if rules_dir != Path::new(".tree-police") || rules_dir.exists() {
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let Some(top) = cwd.ancestors().find(|dir| dir.join(".git").exists()) else {
+        return;
+    };
+    let found = top.join(".tree-police");
+    if top != cwd && found.is_dir() {
+        tracing::warn!(
+            "no .tree-police/ in the current directory, so {} is not used; pass `--rules-dir {}` to use it",
+            found.display(),
+            found.display()
+        );
+    }
+}
+
+/// Fail on a path argument that doesn't exist: it is almost always a typo,
+/// and scanning nothing would pass a CI gate silently.
+fn check_paths_exist(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        path.symlink_metadata()
+            .with_context(|| format!("cannot scan {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Log every path the scan could not walk or read. Returns whether there
+/// were any, in which case the results are incomplete and the run fails.
+fn report_scan_errors(errors: &[String]) -> bool {
+    for err in errors {
+        tracing::error!("{err}");
+    }
+    if !errors.is_empty() {
+        tracing::error!(
+            "could not scan {} path(s); the results are incomplete",
+            errors.len()
+        );
+    }
+    !errors.is_empty()
 }
 
 /// 1 if any finding is at or above `--fail-on`, else 0.
