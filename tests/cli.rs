@@ -425,6 +425,25 @@ fn config_globs_are_relative_to_repo_root_not_cwd() {
 }
 
 #[test]
+fn config_globs_see_through_dot_dot_in_scanned_paths() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "exclude = [\"vendor/\"]\n\n[[scope]]\nrules = [\"forbidden_print\"]\npaths = [\"src/**\"]\n",
+        ),
+        ("src/a.py", "x = 1\n"),
+        ("vendor/v.py", "print(1)\n"),
+        ("lib/b.py", "print(1)\n"),
+    ]);
+    tree_police()
+        .current_dir(repo.path())
+        .args(["--format", "compact", "src/../vendor", "src/../lib"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Scanned 1 file(s)"));
+}
+
+#[test]
 fn config_with_unknown_rule_is_an_internal_error() {
     let repo = temp_repo(&[
         (
@@ -723,6 +742,70 @@ fn grep_searches_any_text_file_without_a_grammar() {
         .stdout(predicate::str::contains("blob.bin").not());
 }
 
+#[test]
+fn unknown_rule_or_category_filter_is_an_error() {
+    tree_police()
+        .args(["--rule", "forbidden_prnt", PY_VIOLATIONS])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "--rule: unknown rule ID \"forbidden_prnt\"",
+        ));
+    tree_police()
+        .args(["--category", "securty", PY_VIOLATIONS])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--category: unknown category"))
+        .stderr(predicate::str::contains("securty"));
+}
+
+#[test]
+fn missing_path_is_an_error_not_an_empty_scan() {
+    tree_police()
+        .args(["--format", "compact", PY_CLEAN, "no/such/dir"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot scan no/such/dir"));
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_paths_fail_the_scan_after_reporting_other_findings() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = temp_repo(&[
+        ("a.py", "print(1)\n"),
+        ("b.py", "print(2)\n"),
+        ("sub/c.py", "print(3)\n"),
+    ]);
+    let mode = |path: &str, mode| {
+        let path = repo.path().join(path);
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    mode("b.py", 0o000);
+    mode("sub", 0o000);
+    if std::fs::read(repo.path().join("b.py")).is_ok() {
+        // Running as root: permissions aren't enforced.
+        mode("sub", 0o755);
+        return;
+    }
+    let output = tree_police()
+        .current_dir(repo.path())
+        .args(["--format", "compact", "."])
+        .output()
+        .unwrap();
+    mode("sub", 0o755);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("a.py:1:1: warning forbidden_print"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("b.py"), "{stderr}");
+    assert!(stderr.contains("sub"), "{stderr}");
+    assert!(stderr.contains("could not scan 2 path(s)"), "{stderr}");
+}
+
 fn git(dir: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .current_dir(dir)
@@ -919,6 +1002,46 @@ fn git_history_query_reports_the_introducing_commit() {
         text.contains(&format!("app.py:1:1: @fn first={} ", &first[..7])),
         "{text}"
     );
+}
+
+#[test]
+fn running_from_a_subdirectory_warns_about_the_repo_rules_dir() {
+    let repo = temp_repo(&[
+        (
+            ".tree-police/config.toml",
+            "disable = [\"forbidden_print\"]\n",
+        ),
+        ("sub/a.py", "x = 1\n"),
+    ]);
+    git(repo.path(), &["init", "-q"]);
+    tree_police()
+        .current_dir(repo.path().join("sub"))
+        .arg(".")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--rules-dir"))
+        .stderr(predicate::str::contains(".tree-police"));
+    // From the root it is found, so no warning.
+    tree_police()
+        .current_dir(repo.path())
+        .arg(".")
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn git_history_revision_is_never_parsed_as_a_git_option() {
+    let repo = history_repo();
+    let out = repo.path().join("written-by-git.txt");
+    tree_police()
+        .current_dir(repo.path())
+        .arg(format!("--git-history=--output={}", out.display()))
+        .args(["--grep", "x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("bad revision '--output="));
+    assert!(!out.exists(), "git treated the revision as --output");
 }
 
 #[test]

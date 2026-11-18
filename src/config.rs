@@ -27,7 +27,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -300,9 +300,25 @@ impl Config {
     }
 
     fn relative(&self, path: &Path) -> Option<PathBuf> {
-        let abs = std::path::absolute(path).ok()?;
+        let abs = absolute_normalized(path).ok()?;
         abs.strip_prefix(&self.root).ok().map(Path::to_path_buf)
     }
+}
+
+/// `path` made absolute with `.` and `..` resolved lexically, without
+/// touching the filesystem, so `src/../vendor/a.py` matches `vendor/**`.
+pub(crate) fn absolute_normalized(path: &Path) -> std::io::Result<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in std::path::absolute(path)?.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    Ok(out)
 }
 
 fn build_entry(raw: RawEntry, catalog: &Catalog) -> Result<Entry> {
@@ -455,6 +471,24 @@ mod tests {
         assert!(!c.excludes(Path::new("/repo/src/a.py")));
         assert!(!c.excludes(Path::new("/elsewhere/vendor/a.py")));
         assert!(!Config::default().excludes(Path::new("/repo/vendor/a.py")));
+    }
+
+    #[test]
+    fn globs_match_paths_with_dot_dot_components() {
+        let c = config(
+            r#"
+            exclude = ["vendor/"]
+
+            [[scope]]
+            rules = ["forbidden_print"]
+            paths = ["src/**"]
+            "#,
+        );
+        assert!(c.excludes(Path::new("/repo/src/../vendor/a.py")));
+        assert!(c.excludes(Path::new("/repo/./vendor/a.py")));
+        let f = || finding("x", "forbidden_print", None);
+        assert!(surviving(&c, "/repo/src/../lib/a.py", f()).is_none());
+        assert!(surviving(&c, "/repo/lib/../src/a.py", f()).is_some());
     }
 
     #[test]
