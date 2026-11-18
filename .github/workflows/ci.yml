@@ -1,0 +1,34 @@
+name: CI
+
+# The same test/lint gate `just release` runs locally, on every pull request
+# and every push to main, so a broken main is caught before a release tag.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # Same Nix setup as cli-release.yml and release.yml; the dev shell
+      # (flake.nix) provides cargo, clippy, rustfmt, pre-commit and the
+      # linters the pre-commit hooks call.
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+
+      # Unit tests, black-box CLI tests (tests/cli.rs) and the per-rule
+      # query-case fixtures (tests/query_cases.rs).
+      - name: Test
+        run: nix develop --command cargo test --locked --release
+
+      # .pre-commit-config.yaml: cargo fmt --check, clippy --deny warnings,
+      # alejandra, statix, deadnix, markdownlint and actionlint.
+      - name: Lint (pre-commit)
+        run: nix develop --command pre-commit run --all-files --show-diff-on-failure
