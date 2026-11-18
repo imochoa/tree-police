@@ -84,43 +84,43 @@ impl Suppressions {
         let Ok(text) = node.utf8_text(source) else {
             return;
         };
-        let Some(idx) = text.find(MARKER) else {
-            return;
-        };
         let line = node.start_position().row + 1;
         let warn = |msg: String| tracing::warn!("{}:{line}: {msg}", path.display());
 
-        let (word, rest) = split_word(text[idx + MARKER.len()..].trim_start());
-        let scope = match word {
-            "ignore" => Scope::Line(node.start_position().row),
-            "ignore-next-line" => Scope::Line(node.end_position().row + 1),
-            "ignore-file" => Scope::File,
-            other => {
+        let raw = match parse_directive(text) {
+            None => return,
+            Some(Ok(raw)) => raw,
+            Some(Err(DirectiveError::Unrecognized(other))) => {
                 warn(format!(
                     "unrecognized tree-police directive {other:?} \
                      (expected ignore, ignore-next-line, or ignore-file)"
                 ));
                 return;
             }
-        };
-
-        let selectors = match rest.strip_prefix('[') {
-            None => None,
-            Some(list) => {
-                let Some(end) = list.find(']') else {
-                    warn("unclosed `[` in tree-police directive".to_string());
-                    return;
-                };
-                let mut sels = Vec::new();
-                for item in list[..end].split(',').filter(|s| !s.trim().is_empty()) {
-                    match Selector::parse(item).and_then(|s| catalog.check(&s).map(|()| s)) {
-                        Ok(sel) => sels.push(sel),
-                        Err(err) => warn(format!("in tree-police {word}: {err}")),
-                    }
-                }
-                Some(sels)
+            Some(Err(DirectiveError::UnclosedBracket)) => {
+                warn("unclosed `[` in tree-police directive".to_string());
+                return;
             }
         };
+        let scope = match raw.kind {
+            Kind::Ignore => Scope::Line(node.start_position().row),
+            Kind::IgnoreNextLine => Scope::Line(node.end_position().row + 1),
+            Kind::IgnoreFile => Scope::File,
+        };
+        let selectors = raw.selectors.map(|items| {
+            items
+                .into_iter()
+                .filter_map(|item| {
+                    match Selector::parse(item).and_then(|s| catalog.check(&s).map(|()| s)) {
+                        Ok(sel) => Some(sel),
+                        Err(err) => {
+                            warn(format!("in tree-police {}: {err}", raw.kind.as_str()));
+                            None
+                        }
+                    }
+                })
+                .collect()
+        });
         self.directives.push(Directive { scope, selectors });
     }
 
@@ -135,7 +135,72 @@ impl Suppressions {
     }
 }
 
-/// Split off a leading `[a-z-]+` word.
+/// Which directive a comment carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Ignore,
+    IgnoreNextLine,
+    IgnoreFile,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Ignore => "ignore",
+            Kind::IgnoreNextLine => "ignore-next-line",
+            Kind::IgnoreFile => "ignore-file",
+        }
+    }
+}
+
+/// A directive as written in a comment, before its selectors are checked
+/// against the catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawDirective<'a> {
+    pub kind: Kind,
+    /// The `[…]` items, untrimmed, blank ones dropped; `None` = no list.
+    pub selectors: Option<Vec<&'a str>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectiveError<'a> {
+    /// The word after `tree-police:` isn't a known directive.
+    Unrecognized(&'a str),
+    UnclosedBracket,
+}
+
+/// Parse the directive in one comment's text; `None` if it has no marker.
+///
+/// Pure (no tree-sitter, no catalog) so it can be property-tested, fuzzed
+/// (`fuzz/`), and compared against the Lean model in `formal/` (see
+/// `tests/lean_oracle.rs`).
+pub fn parse_directive(text: &str) -> Option<Result<RawDirective<'_>, DirectiveError<'_>>> {
+    let idx = text.find(MARKER)?;
+    let (word, rest) = split_word(text[idx + MARKER.len()..].trim_start());
+    let kind = match word {
+        "ignore" => Kind::Ignore,
+        "ignore-next-line" => Kind::IgnoreNextLine,
+        "ignore-file" => Kind::IgnoreFile,
+        other => return Some(Err(DirectiveError::Unrecognized(other))),
+    };
+    let selectors = match rest.strip_prefix('[') {
+        None => None,
+        Some(list) => {
+            let Some(end) = list.find(']') else {
+                return Some(Err(DirectiveError::UnclosedBracket));
+            };
+            Some(
+                list[..end]
+                    .split(',')
+                    .filter(|s| !s.trim().is_empty())
+                    .collect(),
+            )
+        }
+    };
+    Some(Ok(RawDirective { kind, selectors }))
+}
+
+/// Split off a leading `[A-Za-z0-9-]*` word.
 fn split_word(s: &str) -> (&str, &str) {
     let end = s
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
