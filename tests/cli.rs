@@ -806,6 +806,67 @@ fn unreadable_paths_fail_the_scan_after_reporting_other_findings() {
     assert!(stderr.contains("could not scan 2 path(s)"), "{stderr}");
 }
 
+#[cfg(unix)]
+#[test]
+fn unreadable_directory_under_an_excluded_path_is_not_walked() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = temp_repo(&[
+        (".tree-police/config.toml", "exclude = [\"vendor/\"]\n"),
+        ("a.py", "print(1)\n"),
+        ("vendor/locked/b.py", "print(2)\n"),
+    ]);
+    let locked = repo.path().join("vendor/locked");
+    let mode = |mode| {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    mode(0o000);
+    if std::fs::read_dir(&locked).is_ok() {
+        // Running as root: permissions aren't enforced.
+        mode(0o755);
+        return;
+    }
+    let output = tree_police()
+        .current_dir(repo.path())
+        .args(["--format", "compact", "--fail-on", "none", "."])
+        .output()
+        .unwrap();
+    mode(0o755);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("a.py:1:1"), "{stdout}");
+    assert!(!stdout.contains("b.py"), "{stdout}");
+    assert!(!stderr.contains("could not scan"), "{stderr}");
+}
+
+#[test]
+fn bad_gitignore_glob_warns_instead_of_failing_the_scan() {
+    let repo = temp_repo(&[
+        (".gitignore", "{unclosed\n"),
+        ("sub/.gitignore", "[bad\n"),
+        ("sub/a.py", "print(1)\n"),
+    ]);
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    // Scanning `sub` reads the root .gitignore as a parent ignore file, which
+    // the walker reports as an error rather than attaching it to an entry.
+    for target in [".", "sub"] {
+        let output = tree_police()
+            .current_dir(repo.path())
+            .args(["--format", "compact", "--fail-on", "none", target])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{target}: {stdout}\n{stderr}"
+        );
+        assert!(stdout.contains("a.py:1:1"), "{target}: {stdout}");
+        assert!(stderr.contains("unclosed"), "{target}: {stderr}");
+    }
+}
+
 fn git(dir: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .current_dir(dir)

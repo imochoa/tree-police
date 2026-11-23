@@ -12,7 +12,7 @@ use regex::bytes::Regex;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
-use crate::config::{Catalog, Config};
+use crate::config::{Catalog, Config, ExcludeDirs};
 use crate::registry::{self, LangSpec};
 use crate::rules::Ruleset;
 use crate::severity::Severity;
@@ -122,7 +122,7 @@ pub fn scan(
         return Ok((Vec::new(), ScanStats::default()));
     }
 
-    let (mut files, mut errors) = collect_files(paths, ruleset, opts);
+    let (mut files, mut errors) = collect_files(paths, ruleset, opts, config.exclude_dirs());
     files.retain(|path| !config.excludes(path) && !opts.skips(path));
     let catalog = Catalog::from_ruleset(ruleset);
 
@@ -174,6 +174,15 @@ pub fn scan(
 /// counterparts below -- same gitignore/hidden-file handling either way,
 /// they only differ in how they decide whether a given file counts.
 fn build_walker(paths: &[PathBuf], opts: &ScanOptions) -> WalkBuilder {
+    walker(paths, opts, None)
+}
+
+/// [`build_walker`] that also never descends into directories the config's
+/// `exclude` globs or `opts.skip_dirs` cover, so nothing under them is even
+/// read (an unreadable excluded directory is not a walk error). The
+/// per-file `retain` in [`scan`] still applies to explicitly passed paths.
+fn walker(paths: &[PathBuf], opts: &ScanOptions, exclude: Option<ExcludeDirs>) -> WalkBuilder {
+    let skip_dirs = opts.skip_dirs.clone();
     let mut builder = WalkBuilder::new(&paths[0]);
     for p in &paths[1..] {
         builder.add(p);
@@ -186,31 +195,51 @@ fn build_walker(paths: &[PathBuf], opts: &ScanOptions) -> WalkBuilder {
         .ignore(opts.respect_gitignore)
         .parents(opts.respect_gitignore)
         // Never descend into the archived grammar clones or Terraform state.
-        .filter_entry(|entry| {
+        .filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
-            name != "grammars-old" && name != ".terraform"
+            if name == "grammars-old" || name == ".terraform" {
+                return false;
+            }
+            if !entry.file_type().is_some_and(|t| t.is_dir()) {
+                return true;
+            }
+            let path = entry.path();
+            let skipped = !skip_dirs.is_empty()
+                && std::path::absolute(path)
+                    .is_ok_and(|abs| skip_dirs.iter().any(|dir| abs.starts_with(dir)));
+            !skipped && !exclude.as_ref().is_some_and(|ex| ex.covers_dir(path))
         });
     builder
 }
 
 /// Files to scan under `paths`, plus a message for every walk error (an
-/// unreadable directory, a path that vanished mid-walk).
+/// unreadable directory, a path that vanished mid-walk). A broken ignore
+/// file (a bad glob in a `.gitignore`) is only a warning: it doesn't make
+/// the scan incomplete, and failing on it would fail every run.
 fn collect_files(
     paths: &[PathBuf],
     ruleset: &Ruleset,
     opts: &ScanOptions,
+    exclude: Option<ExcludeDirs>,
 ) -> (Vec<PathBuf>, Vec<String>) {
-    let builder = build_walker(paths, opts);
+    let builder = walker(paths, opts, exclude);
     let mut files = Vec::new();
     let mut errors = Vec::new();
     for result in builder.build() {
         let entry = match result {
             Ok(entry) => entry,
+            Err(err) if is_ignore_file_error(&err) => {
+                tracing::warn!("ignore file: {err}");
+                continue;
+            }
             Err(err) => {
                 errors.push(err.to_string());
                 continue;
             }
         };
+        if let Some(err) = entry.error() {
+            tracing::warn!("ignore file: {err}");
+        }
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -225,6 +254,21 @@ fn collect_files(
         }
     }
     (files, errors)
+}
+
+/// Whether a walk error comes from parsing an ignore file (`.gitignore`,
+/// `.ignore`, the global gitignore) rather than from reading a path to scan.
+/// Parse errors carry a line number or a glob; several at once are `Partial`.
+fn is_ignore_file_error(err: &ignore::Error) -> bool {
+    match err {
+        ignore::Error::Partial(_)
+        | ignore::Error::Glob { .. }
+        | ignore::Error::WithLineNumber { .. } => true,
+        ignore::Error::WithPath { err, .. } | ignore::Error::WithDepth { err, .. } => {
+            is_ignore_file_error(err)
+        }
+        _ => false,
+    }
 }
 
 /// Like `collect_files`, but for one specific language rather than a
