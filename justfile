@@ -36,6 +36,22 @@ wheel:
 test:
     cargo test
 
+# Build the Lean model in formal/ and check its proofs (docs/formal-methods.md).
+lean:
+    cd formal && lake build
+
+# See tests/lean_oracle.rs. More cases: `just lean-oracle 200000`.
+# Differential test: suppress::parse_directive vs the Lean model.
+lean-oracle cases="20000": lean
+    TREE_POLICE_LEAN_ORACLE="{{root}}/formal/.lake/build/bin/oracle" PROPTEST_CASES={{cases}} \
+        cargo test --test lean_oracle
+
+# Crashes land in fuzz/artifacts/<target>/; replay one with
+#   cd fuzz && cargo fuzz run -s none <target> artifacts/<target>/<file>
+# Coverage-guided fuzzing of one fuzz/ target, e.g. `just fuzz suppress_python 300`.
+fuzz target="parse_directive" seconds="60":
+    cd fuzz && cargo fuzz run -s none {{target}} -- -max_total_time={{seconds}}
+
 # Build a static (musl) tree-police for the host architecture and package it
 # into a `FROM scratch` image, e.g. for local testing. The published image
 # (see .github/workflows/release.yml) is multi-arch (amd64 + arm64) via

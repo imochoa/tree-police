@@ -1,0 +1,11 @@
+name = "tree-police-formal"
+defaultTargets = ["TreePolice", "oracle"]
+
+[[lean_lib]]
+name = "TreePolice"
+
+# Reads one JSON string per line on stdin, prints the model's parse of it
+# as one JSON value per line. tests/lean_oracle.rs drives it.
+[[lean_exe]]
+name = "oracle"
+root = "Oracle"

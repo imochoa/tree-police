@@ -1,0 +1,41 @@
+[package]
+name = "tree-police-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tree-sitter = "0.25"
+tree-sitter-python = "0.23"
+
+[dependencies.tree-police]
+path = ".."
+
+# Its own workspace, so the main crate's `cargo test` never builds it.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse_directive"
+path = "fuzz_targets/parse_directive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "selector_roundtrip"
+path = "fuzz_targets/selector_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "suppress_python"
+path = "fuzz_targets/suppress_python.rs"
+test = false
+doc = false
+bench = false
