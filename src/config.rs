@@ -272,6 +272,16 @@ impl Config {
             .is_some_and(|set| self.relative(path).is_some_and(|rel| set.is_match(rel)))
     }
 
+    /// The top-level `exclude` globs as a standalone matcher that prunes
+    /// whole directories during the walk (see [`ExcludeDirs`]), or `None`
+    /// without any.
+    pub fn exclude_dirs(&self) -> Option<ExcludeDirs> {
+        self.exclude.as_ref().map(|set| ExcludeDirs {
+            root: self.root.clone(),
+            set: set.clone(),
+        })
+    }
+
     /// Apply `disable`, scopes and overrides to one file's findings in place.
     pub fn apply(&self, path: &Path, findings: &mut Vec<Finding>) {
         if !self.disabled.is_empty() {
@@ -302,6 +312,33 @@ impl Config {
     fn relative(&self, path: &Path) -> Option<PathBuf> {
         let abs = absolute_normalized(path).ok()?;
         abs.strip_prefix(&self.root).ok().map(Path::to_path_buf)
+    }
+}
+
+/// Owned copy of the top-level `exclude` globs, for the walker's
+/// `filter_entry` (which needs `'static` data), so excluded directories are
+/// never descended into -- an unreadable directory under an excluded path
+/// must not fail the scan.
+#[derive(Debug, Clone)]
+pub struct ExcludeDirs {
+    root: PathBuf,
+    set: GlobSet,
+}
+
+impl ExcludeDirs {
+    /// Whether every file under directory `dir` is excluded. Probed with a
+    /// child and a grandchild whose names (NUL bytes) no real path can
+    /// contain, so a file glob like `*.py` or `src/?` never prunes a
+    /// directory, while `vendor/`, `archive/**`, `**/gen/**` do.
+    pub fn covers_dir(&self, dir: &Path) -> bool {
+        let Some(rel) = absolute_normalized(dir)
+            .ok()
+            .and_then(|abs| abs.strip_prefix(&self.root).ok().map(Path::to_path_buf))
+        else {
+            return false;
+        };
+        let child = rel.join("\0\0\0");
+        self.set.is_match(&child) && self.set.is_match(child.join("\0\0\0"))
     }
 }
 
@@ -460,6 +497,22 @@ mod tests {
         assert!(surviving(&c, "/repo/a.py", eval).is_none());
         let todo = finding("x", "todo", Some("forbidden"));
         assert!(surviving(&c, "/elsewhere/a.py", todo).is_some());
+    }
+
+    #[test]
+    fn exclude_dirs_prunes_only_fully_excluded_directories() {
+        let c =
+            config(r#"exclude = ["vendor/", "archive/**", "**/gen/**", "**/*.gen.py", "src/?"]"#);
+        let dirs = c.exclude_dirs().unwrap();
+        assert!(dirs.covers_dir(Path::new("/repo/vendor")));
+        assert!(dirs.covers_dir(Path::new("/repo/vendor/lib")));
+        assert!(dirs.covers_dir(Path::new("/repo/archive")));
+        assert!(dirs.covers_dir(Path::new("/repo/a/gen")));
+        assert!(!dirs.covers_dir(Path::new("/repo")));
+        assert!(!dirs.covers_dir(Path::new("/repo/src")));
+        // A directory named like an excluded file keeps its other files.
+        assert!(!dirs.covers_dir(Path::new("/repo/models.gen.py")));
+        assert!(!dirs.covers_dir(Path::new("/elsewhere/vendor")));
     }
 
     #[test]
